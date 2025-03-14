@@ -5,6 +5,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { Message } from './schemas/message.schema';
 import { Response } from 'express';
 import { FileStorageService } from '../file-storage/file-storage.service';
+import { Public } from '../auth/decorators/public.decorator';
 
 @Controller('chats')
 @UseGuards(JwtAuthGuard)
@@ -50,10 +51,12 @@ export class ChatsController {
   }
 
   @Get('file/:fileId')
+  @Public()
   async getFile(
     @Param('fileId') fileId: string, 
     @Query('preview') preview: string,
-    @Res() res: Response
+    @Res() res: Response,
+    @Request() req
   ) {
     try {
       const result = await this.fileStorageService.getFile(fileId);
@@ -73,23 +76,55 @@ export class ChatsController {
       
       // Ya no necesitamos concatenar chunks, el resultado ya contiene los datos
       const fileData = result.data;
+      const fileSize = fileData.length;
       
-      // Configurar cabeceras apropiadas
+      // Nombre de archivo seguro para encabezados HTTP
+      const safeFilename = encodeURIComponent(result.file.originalFilename).replace(/['()]/g, escape);
+      
+      // Configurar cabeceras básicas
       res.setHeader('Content-Type', result.file.contentType);
-      res.setHeader('Content-Disposition', `inline; filename=${result.file.originalFilename}`);
-      res.setHeader('Content-Length', fileData.length);
+      res.setHeader('Content-Disposition', `inline; filename="${safeFilename}"; filename*=UTF-8''${safeFilename}`);
+      res.setHeader('Accept-Ranges', 'bytes');
+      res.setHeader('Cache-Control', 'public, max-age=3600'); // Cache de 1 hora
       
-      // Añadir cabeceras para mejorar la reproducción de video
-      if (result.file.contentType.startsWith('video/')) {
-        res.setHeader('Accept-Ranges', 'bytes');
-        // Permitir CORS para la reproducción en diferentes dominios
-        res.setHeader('Access-Control-Allow-Origin', '*');
-        res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-        res.setHeader('Access-Control-Allow-Headers', 'Range');
+      // CORS headers para reproducción cross-domain
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type');
+      res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+      
+      // Manejo de solicitudes de rango (Range Requests)
+      const rangeHeader = req.headers.range;
+      
+      if (rangeHeader && result.file.contentType.startsWith('video/')) {
+        console.log(`Solicitud de rango recibida: ${rangeHeader}`);
+        
+        // Parsear el header de rango
+        const parts = rangeHeader.replace(/bytes=/, '').split('-');
+        const start = parseInt(parts[0], 10);
+        const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+        
+        // Validar rangos
+        if (isNaN(start) || start < 0 || start >= fileSize) {
+          return res.status(416).send('Requested Range Not Satisfiable');
+        }
+        
+        const chunkSize = (end - start) + 1;
+        console.log(`Streaming video desde byte ${start} hasta ${end} (${chunkSize} bytes)`);
+        
+        // Enviar respuesta parcial (206 Partial Content)
+        res.statusCode = 206;
+        res.setHeader('Content-Length', chunkSize);
+        res.setHeader('Content-Range', `bytes ${start}-${end}/${fileSize}`);
+        
+        // Extraer y enviar solo el fragmento solicitado
+        const chunk = fileData.slice(start, end + 1);
+        return res.end(chunk);
       }
       
-      // Enviar los datos del archivo
-      return res.send(fileData);
+      // Para solicitudes sin rango o archivos que no son video, enviar todo el archivo
+      res.setHeader('Content-Length', fileSize);
+      return res.end(fileData);
     } catch (error) {
       console.error('Error al recuperar archivo:', error);
       return res.status(500).json({ message: 'Error al obtener el archivo', error: error.message });

@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { io, Socket } from 'socket.io-client';
 import axios from 'axios';
 import { useAuth } from './AuthContext';
@@ -65,16 +65,17 @@ interface ChatContextType {
   users: User[];
   typingUsers: Record<string, boolean | string>;
   isLoading: boolean;
+  isLoadingMessages: boolean;
   unreadMessages: Record<string, number>;
-  uploadingFiles: { [key: string]: { progress: number, error?: string } };
+  uploadingFiles: Record<string, { progress: number, error?: string }>;
   setActiveChat: (chat: { type: 'private' | 'room', id: string } | null) => void;
-  sendMessage: (content: string, attachments?: FileAttachment[]) => Promise<void>;
-  createRoom: (name: string, description?: string, isPrivate?: boolean, members?: string[]) => Promise<Room>;
-  updateRoom: (roomId: string, data: { name?: string; description?: string; image?: string; isPrivate?: boolean }) => Promise<Room>;
-  joinRoom: (roomId: string, userId?: string) => Promise<void>;
-  leaveRoom: (roomId: string, userId?: string) => Promise<void>;
-  setTyping: (isTyping: boolean) => void;
-  clearChatHistory: (recipientId: string) => Promise<{ success: boolean, message: string }>;
+  sendMessage: (content: string, attachments?: File[]) => Promise<void>;
+  markAsRead: (messageId: string) => void;
+  startTyping: () => void;
+  stopTyping: () => void;
+  loadMoreMessages: (beforeMessageId: string) => Promise<number>;
+  retryFileUpload: (file: FileAttachment) => void;
+  cancelFileUpload: (file: FileAttachment) => void;
 }
 
 const ChatContext = createContext<ChatContextType>({
@@ -85,30 +86,17 @@ const ChatContext = createContext<ChatContextType>({
   users: [],
   typingUsers: {},
   isLoading: true,
+  isLoadingMessages: false,
   unreadMessages: {},
   uploadingFiles: {},
   setActiveChat: () => {},
   sendMessage: async () => {},
-  createRoom: async () => ({ 
-    _id: '', 
-    name: '', 
-    creator: { id: '', _id: '', name: '', email: '', avatar: '' }, 
-    members: [], 
-    isPrivate: false, 
-    createdAt: '' 
-  }),
-  updateRoom: async () => ({ 
-    _id: '', 
-    name: '', 
-    creator: { id: '', _id: '', name: '', email: '', avatar: '' }, 
-    members: [], 
-    isPrivate: false, 
-    createdAt: '' 
-  }),
-  joinRoom: async () => {},
-  leaveRoom: async () => {},
-  setTyping: () => {},
-  clearChatHistory: async () => ({ success: false, message: 'Not implemented' }),
+  markAsRead: () => {},
+  startTyping: () => {},
+  stopTyping: () => {},
+  loadMoreMessages: async () => 0,
+  retryFileUpload: () => {},
+  cancelFileUpload: () => {},
 });
 
 export const useChat = () => useContext(ChatContext);
@@ -122,11 +110,64 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [onlineUsers, setOnlineUsers] = useState<Record<string, boolean>>({});
   const [typingUsers, setTypingUsers] = useState<Record<string, boolean | string>>({});
   const [isLoading, setIsLoading] = useState(true);
+  const [isLoadingMessages, setIsLoadingMessages] = useState(false);
   const [socketConnected, setSocketConnected] = useState(false);
   const [unreadMessages, setUnreadMessages] = useState<Record<string, number>>({});
-  const [uploadingFiles, setUploadingFiles] = useState<{ [key: string]: { progress: number, error?: string } }>({});
+  const [uploadingFilesByChat, setUploadingFilesByChat] = useState<{
+    [chatId: string]: {
+      [fileId: string]: {
+        progress: number;
+        error?: string;
+      }
+    }
+  }>({});
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   
+  const uploadingFiles = useMemo(() => {
+    if (!activeChat) return {};
+    const chatId = `${activeChat.type}-${activeChat.id}`;
+    return uploadingFilesByChat[chatId] || {};
+  }, [activeChat, uploadingFilesByChat]);
+
+  const updateUploadingFiles = useCallback((
+    chatId: string,
+    fileId: string,
+    data: { progress: number; error?: string } | null
+  ) => {
+    console.log(`Actualizando estado de archivo ${fileId} en chat ${chatId}:`, data);
+    
+    setUploadingFilesByChat(prev => {
+      const newState = { ...prev };
+      
+      // Si no existe el chat, lo creamos
+      if (!newState[chatId]) {
+        newState[chatId] = {};
+      }
+      
+      // Si data es null, eliminamos el archivo
+      if (data === null) {
+        if (newState[chatId][fileId]) {
+          const { [fileId]: _, ...restFiles } = newState[chatId];
+          newState[chatId] = restFiles;
+          console.log(`Eliminado archivo ${fileId} de chat ${chatId}`);
+        }
+      } else {
+        // Actualizamos o agregamos el archivo
+        newState[chatId][fileId] = data;
+        console.log(`Actualizado archivo ${fileId} en chat ${chatId} con progreso ${data.progress}%`);
+      }
+      
+      return newState;
+    });
+  }, []);
+
+  const cancelFileUpload = (file: FileAttachment) => {
+    if (!file.tempId || !activeChat) return;
+    
+    const chatId = `${activeChat.type}-${activeChat.id}`;
+    updateUploadingFiles(chatId, file.tempId, null);
+  };
+
   const socketRef = useRef<Socket | null>(null);
   const currentActiveChatRef = useRef(activeChat);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -172,12 +213,12 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // Identificar la clave de chat para seguimiento de notificaciones
       let chatKey = '';
       if (message.room) {
-        chatKey = `room_${message.room}`;
-      } else if (message.sender._id !== user.id) {
-        chatKey = `user_${message.sender._id}`;
-      } else if (message.recipient) {
-        chatKey = `user_${message.recipient}`;
+        chatKey = `room-${message.room}`;
+      } else {
+        chatKey = message.sender._id === user.id ? `private-${message.recipient}` : `private-${message.sender._id}`;
       }
+      
+      console.log('Mensaje recibido:', message, 'Chat activo:', activeChat);
       
       // Solo agregar el mensaje si es relevante para el chat activo
       if (
@@ -186,6 +227,7 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
            (message.sender._id === user.id && message.recipient === activeChat.id))) ||
         (activeChat?.type === 'room' && message.room === activeChat.id)
       ) {
+        console.log('Agregando mensaje al chat activo:', message);
         setMessages(prev => [...prev, message]);
       } 
       // Si el mensaje no es para el chat activo y no fue enviado por el usuario actual, incrementar contador
@@ -325,9 +367,7 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     if (activeChat && socketRef.current) {
       // Crear una clave para el chat actual
-      const chatKey = activeChat.type === 'private' 
-        ? `user_${activeChat.id}` 
-        : `room_${activeChat.id}`;
+      const chatKey = `${activeChat.type}-${activeChat.id}`;
       
       // Resetear el contador de mensajes no leídos para este chat
       setUnreadMessages(prev => ({
@@ -347,7 +387,7 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const handleActiveChatChange = (chat: { type: 'private' | 'room', id: string } | null) => {
     // Limpiar las notificaciones no leídas cuando se activa un chat
     if (chat) {
-      const chatKey = chat.type === 'private' ? `user_${chat.id}` : `room_${chat.id}`;
+      const chatKey = `${chat.type}-${chat.id}`;
       setUnreadMessages(prev => ({
         ...prev,
         [chatKey]: 0
@@ -357,15 +397,45 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setActiveChat(chat);
   };
 
-  // Cargar mensajes cuando se selecciona un chat
+  // Efecto para actualizar los mensajes cuando cambia el chat activo
   useEffect(() => {
-    if (!activeChat || !user || !isAuthenticated) {
-      setMessages([]);
-      return;
+    if (!activeChat || !isAuthenticated) return;
+    
+    // Resetear el estado al cambiar de chat
+    setMessages([]);
+    setIsLoadingMessages(true);
+    
+    // Reiniciar estados de mensajes no leídos y archivos en carga
+    if (activeChat) {
+      // Limpiar mensajes no leídos
+      setUnreadMessages(prev => {
+        const chatKey = `${activeChat.type}-${activeChat.id}`;
+        if (prev[chatKey]) {
+          const newState = { ...prev };
+          delete newState[chatKey];
+          return newState;
+        }
+        return prev;
+      });
+      
+      // Asegurarnos de que la sección "Archivos en proceso" desaparezca al cambiar de chat
+      // incluso cuando ya había terminado la carga con 100%
+      const chatId = `${activeChat.type}-${activeChat.id}`;
+      if (chatId in uploadingFilesByChat) {
+        const hasCompletedUploads = Object.values(uploadingFilesByChat[chatId])
+          .some(status => status.progress === 100);
+          
+        if (hasCompletedUploads) {
+          setUploadingFilesByChat(prev => {
+            const newState = {...prev};
+            delete newState[chatId];
+            return newState;
+          });
+        }
+      }
     }
-    
-    setIsLoading(true);
-    
+
+    // Solicitar mensajes al servidor
     const fetchMessages = async () => {
       try {
         let endpoint = '';
@@ -395,7 +465,7 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
       } catch (error) {
         console.error('Error fetching messages:', error);
       } finally {
-        setIsLoading(false);
+        setIsLoadingMessages(false);
       }
     };
     
@@ -409,89 +479,148 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
   }, [activeChat, user, isAuthenticated, API_URL]);
   
-  const sendMessage = async (content: string, attachments: FileAttachment[] = []) => {
-    if (!activeChat || !isAuthenticated || !socketRef.current) {
-      return;
-    }
-
-    // Inicializar estado de carga para cada archivo
-    const newUploadingFiles = { ...uploadingFiles };
-    
-    // Para archivos grandes, especialmente videos, los enviamos directamente sin fragmentar
-    let processedAttachments: FileAttachment[] = [];
-
-    // Asignar IDs temporales para seguimiento
-    const attachmentsWithIds = attachments.map(attachment => ({
-      ...attachment,
-      tempId: `temp-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`
-    }));
-
-    // Establecer el estado inicial de carga para cada archivo
-    attachmentsWithIds.forEach(attachment => {
-      newUploadingFiles[attachment.tempId] = { progress: 0 };
-    });
-    setUploadingFiles(newUploadingFiles);
-
-    try {
-      for (const attachment of attachmentsWithIds) {
-        // Actualizar progreso
-        setUploadingFiles(prev => ({
-          ...prev,
-          [attachment.tempId]: { progress: 10, error: undefined }
-        }));
-
-        // Si es un video o archivo grande, lo enviamos como un único archivo
-        if (attachment.fileType === FileType.VIDEO || 
-            (attachment.size && attachment.size > 5 * 1024 * 1024)) {
-          processedAttachments.push({
-            ...attachment,
-            // Agregamos una bandera para indicar que debe ser almacenado como archivo grande
-            isLargeFile: true
+  // Efecto para limpiar archivos completados automáticamente
+  useEffect(() => {
+    // Revisa cada 2 segundos si hay archivos que están al 100% que deban eliminarse
+    const cleanupInterval = setInterval(() => {
+      setUploadingFilesByChat(prev => {
+        const newState = {...prev};
+        let hasChanges = false;
+        
+        // Revisar todos los chats
+        Object.keys(newState).forEach(chatId => {
+          // Revisar todos los archivos en ese chat
+          Object.keys(newState[chatId]).forEach(fileId => {
+            // Si un archivo está al 100%, eliminarlo
+            if (newState[chatId][fileId].progress === 100) {
+              delete newState[chatId][fileId];
+              hasChanges = true;
+            }
           });
+          
+          // Si el chat ya no tiene archivos, eliminar el chat
+          if (Object.keys(newState[chatId]).length === 0) {
+            delete newState[chatId];
+            hasChanges = true;
+          }
+        });
+        
+        return hasChanges ? newState : prev;
+      });
+    }, 2000);
+    
+    return () => clearInterval(cleanupInterval);
+  }, []);
 
-          // Actualizar progreso
-          setUploadingFiles(prev => ({
-            ...prev,
-            [attachment.tempId]: { progress: 50, error: undefined }
-          }));
-        } else {
-          // Para otros archivos pequeños, los enviamos tal como están
-          processedAttachments.push(attachment);
+  const sendMessage = async (content: string, attachments?: File[]) => {
+    if (!socketRef.current || !activeChat) return;
+    
+    try {
+      // Generar tempIds para los archivos y convertirlos a FileAttachment
+      const attachmentsWithIds: FileAttachment[] = [];
+      
+      if (attachments && attachments.length > 0) {
+        for (const file of attachments) {
+          const tempId = `temp-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+          
+          // Determinar tipo de archivo de forma segura
+          let fileType = FileType.DOCUMENT;
+          const fileTypeString = file.type || ''; // Usar string vacío si type es undefined
+          if (fileTypeString.startsWith('image/')) {
+            fileType = FileType.IMAGE;
+          } else if (fileTypeString.startsWith('video/')) {
+            fileType = FileType.VIDEO;
+          } else if (fileTypeString.startsWith('audio/')) {
+            fileType = FileType.AUDIO;
+          } else {
+            fileType = FileType.DOCUMENT;
+          }
+          
+          // Crear objeto FileAttachment para el archivo
+          const attachment: FileAttachment = {
+            tempId,
+            filename: file.name || 'archivo',
+            contentType: file.type || 'application/octet-stream',
+            fileType,
+            size: file.size || 0
+          };
+          
+          // Iniciar indicador de carga inmediatamente para todos los archivos
+          const chatId = `${activeChat?.type}-${activeChat?.id}`;
+          updateUploadingFiles(chatId!, tempId, { progress: 0, error: undefined });
+          
+          // Si es un archivo grande, lo procesamos para subida en segundo plano
+          if (file.size > 5 * 1024 * 1024) { // Más de 5MB
+            attachment.isLargeFile = true;
+            
+            // Leer como base64 para preprocesamiento
+            const reader = new FileReader();
+            reader.readAsDataURL(file);
+            await new Promise<void>((resolve) => {
+              reader.onload = () => {
+                const base64data = reader.result?.toString() || '';
+                // Quitar el prefijo (ej. "data:image/jpeg;base64,")
+                const base64Clean = base64data.split(',')[1];
+                attachment.data = base64Clean;
+                resolve();
+              };
+            });
+            
+            // Agregar a la lista de adjuntos
+            attachmentsWithIds.push(attachment);
+            
+            // Iniciar subida en segundo plano
+            uploadLargeFileToServer(attachment).then(fileId => {
+              if (fileId) {
+                // Actualizar el attachment con el fileId
+                attachment.fileId = fileId;
+                attachment.isLargeFile = true;
+                attachment.data = undefined; // Eliminar los datos binarios
+                
+                // Actualizar progreso a 100%
+                updateUploadingFiles(chatId, tempId, { progress: 100, error: undefined });
+              }
+            }).catch(error => {
+              console.error('Error subiendo archivo:', error);
+              updateUploadingFiles(chatId, tempId, { progress: 0, error: error.message || 'Error al subir el archivo' });
+            });
+          } else {
+            // Para archivos pequeños (<5MB), leerlos como base64 y enviar con el mensaje
+            const reader = new FileReader();
+            reader.readAsDataURL(file);
+            await new Promise<void>((resolve) => {
+              reader.onload = () => {
+                const base64data = reader.result?.toString() || '';
+                // Quitar el prefijo (ej. "data:image/jpeg;base64,")
+                const base64Clean = base64data.split(',')[1];
+                attachment.data = base64Clean;
+                resolve();
+              };
+            });
+            
+            // Agregar a la lista de adjuntos
+            attachmentsWithIds.push(attachment);
+            
+            // Marcar como completado también para archivos pequeños
+            updateUploadingFiles(chatId, tempId, { progress: 100, error: undefined });
+          }
         }
       }
-
+      
+      // Preparar datos del mensaje
       const messageData = {
         content,
-        attachments: processedAttachments,
+        attachments: attachmentsWithIds,
         ...(activeChat.type === 'private' ? { recipientId: activeChat.id } : { roomId: activeChat.id }),
       };
-
-      // Actualizar progreso para todos los archivos
-      const updatedProgress = { ...uploadingFiles };
-      attachmentsWithIds.forEach(attachment => {
-        updatedProgress[attachment.tempId] = { progress: 75, error: undefined };
-      });
-      setUploadingFiles(updatedProgress);
-
+      
+      console.log('Enviando mensaje:', messageData);
+      
       // Enviar el mensaje a través del socket
       socketRef.current.emit('send_message', messageData, (response: any) => {
-        if (response.success) {
-          // Éxito - quitar archivos del estado de carga
-          const finalProgress = { ...uploadingFiles };
-          attachmentsWithIds.forEach(attachment => {
-            delete finalProgress[attachment.tempId];
-          });
-          setUploadingFiles(finalProgress);
-        } else {
-          // Error - actualizar estado con el error
-          const errorProgress = { ...uploadingFiles };
-          attachmentsWithIds.forEach(attachment => {
-            errorProgress[attachment.tempId] = { 
-              progress: 0, 
-              error: response.error || 'Error al enviar el mensaje' 
-            };
-          });
-          setUploadingFiles(errorProgress);
+        console.log('Respuesta al enviar mensaje:', response);
+        if (!response.success) {
+          console.error('Error al enviar mensaje:', response.error);
         }
       });
       
@@ -501,16 +630,7 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
       setSelectedFile(null);
     } catch (error: any) {
-      console.error('Error al procesar archivos:', error);
-      // Actualizar estado con el error
-      const errorProgress = { ...uploadingFiles };
-      attachmentsWithIds.forEach(attachment => {
-        errorProgress[attachment.tempId] = { 
-          progress: 0, 
-          error: error.message || 'Error al procesar archivos' 
-        };
-      });
-      setUploadingFiles(errorProgress);
+      console.error('Error al procesar mensaje:', error);
     }
   };
   
@@ -600,25 +720,156 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
   
+  // Implementación de retryFileUpload
+  const retryFileUpload = (file: FileAttachment) => {
+    if (!file.tempId) return;
+    
+    // Reset progress
+    const chatId = `${activeChat?.type}-${activeChat?.id}`;
+    updateUploadingFiles(chatId!, file.tempId!, { progress: 0, error: undefined });
+    
+    // Prepare for re-upload
+    if (file.data) {
+      // Es un archivo ya convertido a base64
+      uploadLargeFileToServer(file);
+    } else if (file.fileId) {
+      // Remover el error pero mantener el progreso como completado
+      // ya que el archivo ya está subido
+      updateUploadingFiles(chatId!, file.tempId!, { progress: 100, error: undefined });
+    }
+  };
+  
+  // Función auxiliar para subir un archivo grande directamente al servidor
+  const uploadLargeFileToServer = async (attachment: FileAttachment): Promise<string | null> => {
+    if (!attachment.tempId) {
+      attachment.tempId = `temp-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+    }
+    
+    try {
+      // Convertir datos base64 a Blob para subir
+      const base64Data = attachment.data || '';
+      const byteCharacters = atob(base64Data);
+      const byteArrays = [];
+      
+      for (let offset = 0; offset < byteCharacters.length; offset += 512) {
+        const slice = byteCharacters.slice(offset, offset + 512);
+        const byteNumbers = new Array(slice.length);
+        for (let i = 0; i < slice.length; i++) {
+          byteNumbers[i] = slice.charCodeAt(i);
+        }
+        const byteArray = new Uint8Array(byteNumbers);
+        byteArrays.push(byteArray);
+      }
+      
+      const blob = new Blob(byteArrays, { type: attachment.contentType });
+      const file = new File([blob], attachment.filename, { type: attachment.contentType });
+      
+      // Crear FormData para la subida
+      const formData = new FormData();
+      formData.append('file', file);
+      
+      // Iniciar la carga y actualizar el estado
+      const chatId = `${activeChat?.type}-${activeChat?.id}`;
+      updateUploadingFiles(chatId!, attachment.tempId!, { progress: 0, error: undefined });
+      
+      // Realizar la subida con seguimiento de progreso
+      const response = await axios.post(`${API_URL}/file-storage/upload`, formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data'
+        },
+        onUploadProgress: (progressEvent) => {
+          const percentCompleted = progressEvent.total 
+            ? Math.round((progressEvent.loaded * 100) / progressEvent.total)
+            : 0;
+            
+          console.log(`Progreso de subida para ${attachment.tempId}: ${percentCompleted}%`);
+          updateUploadingFiles(chatId!, attachment.tempId!, { progress: percentCompleted, error: undefined });
+          
+          // Si el archivo ha terminado de cargarse (100%), lo eliminamos de la lista después de un segundo
+          if (percentCompleted === 100) {
+            console.log(`Subida completada para ${attachment.tempId}, eliminando en 1 segundo`);
+            // Esperar un segundo para que el usuario vea que se completó y luego eliminar
+            setTimeout(() => {
+              updateUploadingFiles(chatId!, attachment.tempId!, null);
+            }, 1000);
+          }
+        }
+      });
+      
+      if (response.data && response.data.fileId) {
+        return response.data.fileId;
+      }
+      return null;
+    } catch (error: any) {
+      console.error('Error al subir archivo:', error);
+      const chatId = `${activeChat?.type}-${activeChat?.id}`;
+      updateUploadingFiles(chatId!, attachment.tempId!, { 
+        progress: 0, 
+        error: error.message || 'Error al subir el archivo'
+      });
+      return null;
+    }
+  };
+  
+  // Esta función se encarga de marcar un mensaje como leído
+  const handleMarkAsRead = (messageId: string) => {
+    if (!socketRef.current) return;
+    
+    socketRef.current.emit('mark_message_read', { messageId });
+    
+    // Actualizar el estado de mensajes localmente
+    setMessages(prev => 
+      prev.map(msg => 
+        msg._id === messageId ? { ...msg, isRead: true } : msg
+      )
+    );
+  };
+  
+  // Esta función carga más mensajes para la paginación
+  const fetchMoreMessages = async (beforeMessageId: string) => {
+    if (!activeChat || !user || !isAuthenticated) return;
+    
+    try {
+      let endpoint = '';
+      
+      if (activeChat.type === 'private') {
+        endpoint = `${API_URL}/chats/direct/${activeChat.id}?before=${beforeMessageId}`;
+      } else {
+        endpoint = `${API_URL}/chats/room/${activeChat.id}?before=${beforeMessageId}`;
+      }
+      
+      const response = await axios.get(endpoint);
+      
+      // Añadir los mensajes anteriores al inicio del array de mensajes
+      setMessages(prev => [...response.data, ...prev]);
+      
+      return response.data.length;
+    } catch (error) {
+      console.error('Error al cargar más mensajes:', error);
+      return 0;
+    }
+  };
+  
   return (
     <ChatContext.Provider value={{
       activeChat,
       messages,
       rooms,
-      users,
       onlineUsers,
+      users,
       typingUsers,
       isLoading,
+      isLoadingMessages,
       unreadMessages,
       uploadingFiles,
       setActiveChat: handleActiveChatChange,
       sendMessage,
-      createRoom,
-      updateRoom,
-      joinRoom,
-      leaveRoom,
-      setTyping,
-      clearChatHistory,
+      markAsRead: handleMarkAsRead,
+      startTyping: () => setTyping(true),
+      stopTyping: () => setTyping(false),
+      loadMoreMessages: fetchMoreMessages,
+      retryFileUpload,
+      cancelFileUpload
     }}>
       {children}
     </ChatContext.Provider>

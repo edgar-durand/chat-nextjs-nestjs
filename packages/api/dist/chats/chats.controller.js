@@ -18,6 +18,7 @@ const chats_service_1 = require("./chats.service");
 const create_message_dto_1 = require("./dto/create-message.dto");
 const jwt_auth_guard_1 = require("../auth/guards/jwt-auth.guard");
 const file_storage_service_1 = require("../file-storage/file-storage.service");
+const public_decorator_1 = require("../auth/decorators/public.decorator");
 let ChatsController = class ChatsController {
     constructor(chatsService, fileStorageService) {
         this.chatsService = chatsService;
@@ -48,7 +49,7 @@ let ChatsController = class ChatsController {
     findRoomMessages(roomId) {
         return this.chatsService.findRoomMessages(roomId);
     }
-    async getFile(fileId, preview, res) {
+    async getFile(fileId, preview, res, req) {
         try {
             const result = await this.fileStorageService.getFile(fileId);
             if (!result || !result.file || !result.file.complete) {
@@ -62,16 +63,35 @@ let ChatsController = class ChatsController {
                 return res.status(404).json({ message: 'Metadatos no disponibles' });
             }
             const fileData = result.data;
+            const fileSize = fileData.length;
+            const safeFilename = encodeURIComponent(result.file.originalFilename).replace(/['()]/g, escape);
             res.setHeader('Content-Type', result.file.contentType);
-            res.setHeader('Content-Disposition', `inline; filename=${result.file.originalFilename}`);
-            res.setHeader('Content-Length', fileData.length);
-            if (result.file.contentType.startsWith('video/')) {
-                res.setHeader('Accept-Ranges', 'bytes');
-                res.setHeader('Access-Control-Allow-Origin', '*');
-                res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-                res.setHeader('Access-Control-Allow-Headers', 'Range');
+            res.setHeader('Content-Disposition', `inline; filename="${safeFilename}"; filename*=UTF-8''${safeFilename}`);
+            res.setHeader('Accept-Ranges', 'bytes');
+            res.setHeader('Cache-Control', 'public, max-age=3600');
+            res.setHeader('Access-Control-Allow-Origin', '*');
+            res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+            res.setHeader('Access-Control-Allow-Headers', 'Range, Content-Type');
+            res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+            const rangeHeader = req.headers.range;
+            if (rangeHeader && result.file.contentType.startsWith('video/')) {
+                console.log(`Solicitud de rango recibida: ${rangeHeader}`);
+                const parts = rangeHeader.replace(/bytes=/, '').split('-');
+                const start = parseInt(parts[0], 10);
+                const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+                if (isNaN(start) || start < 0 || start >= fileSize) {
+                    return res.status(416).send('Requested Range Not Satisfiable');
+                }
+                const chunkSize = (end - start) + 1;
+                console.log(`Streaming video desde byte ${start} hasta ${end} (${chunkSize} bytes)`);
+                res.statusCode = 206;
+                res.setHeader('Content-Length', chunkSize);
+                res.setHeader('Content-Range', `bytes ${start}-${end}/${fileSize}`);
+                const chunk = fileData.slice(start, end + 1);
+                return res.end(chunk);
             }
-            return res.send(fileData);
+            res.setHeader('Content-Length', fileSize);
+            return res.end(fileData);
         }
         catch (error) {
             console.error('Error al recuperar archivo:', error);
@@ -147,11 +167,13 @@ __decorate([
 ], ChatsController.prototype, "findRoomMessages", null);
 __decorate([
     (0, common_1.Get)('file/:fileId'),
+    (0, public_decorator_1.Public)(),
     __param(0, (0, common_1.Param)('fileId')),
     __param(1, (0, common_1.Query)('preview')),
     __param(2, (0, common_1.Res)()),
+    __param(3, (0, common_1.Request)()),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [String, String, Object]),
+    __metadata("design:paramtypes", [String, String, Object, Object]),
     __metadata("design:returntype", Promise)
 ], ChatsController.prototype, "getFile", null);
 __decorate([

@@ -18,6 +18,15 @@ export declare class FileStorageController {
         success: boolean;
         complete: boolean;
     }>;
+    uploadFile(file: Express.Multer.File, metadata: {
+        contentType: string;
+    }): Promise<{
+        success: boolean;
+        fileId: string;
+        filename: string;
+        size: number;
+        contentType: string;
+    }>;
     getFile(fileId: string, res: Response): Promise<void>;
     listFiles(): Promise<{
         success: boolean;

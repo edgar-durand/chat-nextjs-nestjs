@@ -32,7 +32,7 @@ __decorate([
     __metadata("design:type", String)
 ], FileAttachmentDto.prototype, "fileType", void 0);
 __decorate([
-    (0, class_validator_1.IsNotEmpty)(),
+    (0, class_validator_1.IsOptional)(),
     (0, class_validator_1.IsString)(),
     __metadata("design:type", String)
 ], FileAttachmentDto.prototype, "data", void 0);
@@ -41,6 +41,15 @@ __decorate([
     (0, class_validator_1.IsNumber)(),
     __metadata("design:type", Number)
 ], FileAttachmentDto.prototype, "size", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    (0, class_validator_1.IsString)(),
+    __metadata("design:type", String)
+], FileAttachmentDto.prototype, "fileId", void 0);
+__decorate([
+    (0, class_validator_1.IsOptional)(),
+    __metadata("design:type", Boolean)
+], FileAttachmentDto.prototype, "isLargeFile", void 0);
 class CreateMessageDto {
 }
 exports.CreateMessageDto = CreateMessageDto;

@@ -3,8 +3,10 @@ export declare class FileAttachmentDto {
     filename: string;
     contentType: string;
     fileType: FileType;
-    data: string;
+    data?: string;
     size?: number;
+    fileId?: string;
+    isLargeFile?: boolean;
 }
 export declare class CreateMessageDto {
     content?: string;

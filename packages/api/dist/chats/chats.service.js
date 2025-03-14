@@ -32,6 +32,17 @@ let ChatsService = class ChatsService {
         let processedAttachments = [];
         if (createMessageDto.attachments && createMessageDto.attachments.length > 0) {
             for (const attachment of createMessageDto.attachments) {
+                if (attachment.isLargeFile && attachment.fileId) {
+                    processedAttachments.push({
+                        filename: attachment.filename,
+                        contentType: attachment.contentType,
+                        fileType: attachment.fileType,
+                        size: attachment.size,
+                        fileId: attachment.fileId,
+                        isLargeFile: true
+                    });
+                    continue;
+                }
                 const base64Size = attachment.data ? Buffer.from(attachment.data, 'base64').length : 0;
                 const fileSize = attachment.size || base64Size;
                 if (fileSize > this.MAX_FILE_SIZE) {
@@ -43,6 +54,9 @@ let ChatsService = class ChatsService {
                 }
                 if (fileSize > this.INLINE_FILE_SIZE_LIMIT) {
                     try {
+                        if (!attachment.data) {
+                            throw new common_1.BadRequestException('Missing file data for large file upload');
+                        }
                         const fileBuffer = Buffer.from(attachment.data, 'base64');
                         const fileId = await this.fileStorageService.uploadCompleteFile(fileBuffer, {
                             originalFilename: attachment.filename,

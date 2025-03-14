@@ -15,13 +15,20 @@ export class FileAttachmentDto {
   @IsEnum(FileType)
   fileType: FileType;
 
-  @IsNotEmpty()
+  @IsOptional()
   @IsString()
-  data: string; // Base64 encoded data
+  data?: string; // Base64 encoded data - ahora opcional para archivos grandes ya subidos
 
   @IsOptional()
   @IsNumber()
   size?: number;
+
+  @IsOptional()
+  @IsString()
+  fileId?: string; // ID de referencia para archivos grandes almacenados por separado
+
+  @IsOptional()
+  isLargeFile?: boolean; // Indicador para archivos almacenados aparte
 }
 
 export class CreateMessageDto {

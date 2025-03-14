@@ -74,12 +74,9 @@ let FileStorageService = class FileStorageService {
     }
     async uploadCompleteFile(buffer, metadata) {
         try {
-            console.log(`Iniciando carga de archivo grande: ${metadata.originalFilename}, tamaño: ${metadata.size / 1024 / 1024}MB, tipo: ${metadata.contentType}`);
-            if (!buffer || buffer.length === 0) {
-                throw new Error('El buffer está vacío');
-            }
-            if (Math.abs(buffer.length - metadata.size) > metadata.size * 0.1) {
-                console.warn(`Advertencia: Discrepancia en el tamaño del archivo. Reportado: ${metadata.size}, Recibido: ${buffer.length}`);
+            console.log(`Procesando archivo: ${metadata.originalFilename} (${metadata.size / 1024 / 1024}MB)`);
+            if (buffer.length !== metadata.size) {
+                console.warn(`Tamaño declarado (${metadata.size}) no coincide con tamaño real (${buffer.length})`);
             }
             const timestamp = Date.now();
             const randomString = crypto.randomBytes(8).toString('hex');
@@ -91,7 +88,14 @@ let FileStorageService = class FileStorageService {
             if (buffer.length > MONGO_DOC_SIZE_LIMIT) {
                 storeInFilesystem = true;
                 console.log(`Archivo demasiado grande para MongoDB (${buffer.length / 1024 / 1024}MB), guardando en el sistema de archivos: ${filePath}`);
-                await fs.promises.writeFile(filePath, buffer);
+                try {
+                    await fs.promises.writeFile(filePath, buffer);
+                    console.log(`Archivo guardado exitosamente en: ${filePath}`);
+                }
+                catch (fsError) {
+                    console.error('Error escribiendo archivo al sistema de archivos:', fsError);
+                    throw new Error(`Error guardando archivo: ${fsError.message}`);
+                }
                 newFile = new this.fileStorageModel({
                     filename: safeFilename,
                     originalFilename: metadata.originalFilename,
@@ -125,7 +129,7 @@ let FileStorageService = class FileStorageService {
             }
             console.log(`Guardando metadatos en base de datos: ${metadata.originalFilename}`);
             const savedFile = await newFile.save();
-            console.log(`Archivo guardado exitosamente: ${savedFile._id.toString()}`);
+            console.log(`Archivo registrado exitosamente con ID: ${savedFile._id.toString()}`);
             return savedFile._id.toString();
         }
         catch (error) {

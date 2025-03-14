@@ -39,6 +39,51 @@ export class FileStorageController {
     }
   }
 
+  @Post('upload')
+  @UseInterceptors(FileInterceptor('file'))
+  async uploadFile(
+    @UploadedFile(
+      new ParseFilePipeBuilder()
+        .addMaxSizeValidator({ maxSize: 1024 * 1024 * 100 }) // 100 MB max
+        .build({
+          fileIsRequired: true,
+          errorHttpStatusCode: HttpStatus.BAD_REQUEST,
+        }),
+    ) file: Express.Multer.File,
+    @Body() metadata: { contentType: string }
+  ) {
+    try {
+      console.log(`Recibiendo archivo: ${file.originalname}, tamaño: ${file.size / 1024 / 1024}MB`);
+      
+      // Si no se proporcionó contentType, usamos el detectado por multer
+      const contentType = metadata.contentType || file.mimetype;
+      
+      // Pasar el archivo al servicio para guardarlo
+      const fileId = await this.fileStorageService.uploadCompleteFile(
+        file.buffer,
+        {
+          originalFilename: file.originalname,
+          contentType: contentType,
+          size: file.size
+        }
+      );
+      
+      return { 
+        success: true, 
+        fileId, 
+        filename: file.originalname,
+        size: file.size,
+        contentType: contentType
+      };
+    } catch (error) {
+      console.error('Error al subir archivo:', error);
+      throw new HttpException(
+        `Error al subir archivo: ${error.message}`,
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
   @Get(':fileId')
   async getFile(@Param('fileId') fileId: string, @Res() res: Response) {
     try {

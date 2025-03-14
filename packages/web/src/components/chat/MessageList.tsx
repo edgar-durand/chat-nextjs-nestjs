@@ -3,6 +3,7 @@ import { useChat, FileType, FileAttachment } from '@/contexts/ChatContext';
 import { useAuth } from '@/contexts/AuthContext';
 import Image from 'next/image';
 import { format } from 'date-fns';
+import UploadingFileItem from './UploadingFileItem';
 
 /**
  * Helper function to get initials from a name
@@ -45,6 +46,8 @@ const AttachmentPreview = ({ attachment }: { attachment: FileAttachment }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [showFullscreen, setShowFullscreen] = useState(false);
   const [retryCount, setRetryCount] = useState(0);
+  const [videoError, setVideoError] = useState<string | null>(null);
+  const [isBuffering, setIsBuffering] = useState(false);
 
   useEffect(() => {
     // Si es un video grande, verificar si está disponible
@@ -69,6 +72,7 @@ const AttachmentPreview = ({ attachment }: { attachment: FileAttachment }) => {
           }, 2000); // Reintento cada 2 segundos
         } else {
           setLoadState('error');
+          setVideoError('No se pudo acceder al video');
         }
         return;
       }
@@ -85,12 +89,33 @@ const AttachmentPreview = ({ attachment }: { attachment: FileAttachment }) => {
           }, 2000);
         } else {
           setLoadState('error');
+          setVideoError('El video no se completó correctamente');
         }
       }
     } catch (error) {
       console.error("Error verificando disponibilidad del video:", error);
       setLoadState('error');
+      setVideoError('Error al cargar el video');
     }
+  };
+
+  // Manejo de eventos de video
+  const handleVideoPlay = () => {
+    console.log('Video iniciado correctamente');
+  };
+
+  const handleVideoError = (event: React.SyntheticEvent<HTMLVideoElement, Event>) => {
+    console.error('Error en la reproducción del video:', event);
+    setVideoError('Error al reproducir el video');
+    setLoadState('error');
+  };
+
+  const handleVideoBuffering = () => {
+    setIsBuffering(true);
+  };
+
+  const handleVideoCanPlay = () => {
+    setIsBuffering(false);
   };
 
   // Obtener la fuente del archivo
@@ -139,18 +164,6 @@ const AttachmentPreview = ({ attachment }: { attachment: FileAttachment }) => {
     setLoadState('loaded');
   };
 
-  const handleVideoError = () => {
-    // Si hay un error al cargar el video, reintentar
-    if (retryCount < 10) {
-      setTimeout(() => {
-        setRetryCount(prev => prev + 1);
-      }, 2000);
-    } else {
-      setLoadState('error');
-    }
-  };
-
-  // Función para reintentar cargar el video
   const handleRetry = () => {
     setRetryCount(0);
     setLoadState('initial');
@@ -220,7 +233,7 @@ const AttachmentPreview = ({ attachment }: { attachment: FileAttachment }) => {
             <div className="video-error">
               <img src={getThumbnailSource()} alt="Video thumbnail" />
               <div className="error-message">
-                <p>Error al cargar el video</p>
+                <p>{videoError}</p>
                 <button onClick={handleRetry} className="retry-button">Reintentar</button>
               </div>
             </div>
@@ -230,8 +243,10 @@ const AttachmentPreview = ({ attachment }: { attachment: FileAttachment }) => {
               src={source} 
               controls 
               className="attachment-video loaded"
-              onLoadedData={handleLoadedData}
+              onPlay={handleVideoPlay}
               onError={handleVideoError}
+              onWaiting={handleVideoBuffering}
+              onCanPlay={handleVideoCanPlay}
               poster={getThumbnailSource()}
               preload="metadata"
             />
@@ -263,6 +278,12 @@ const AttachmentPreview = ({ attachment }: { attachment: FileAttachment }) => {
                 />
                 <button onClick={toggleFullscreen} className="close-button">×</button>
               </div>
+            </div>
+          )}
+          {isBuffering && (
+            <div className="buffering-indicator">
+              <div className="loading-spinner"></div>
+              <p>Cargando...</p>
             </div>
           )}
         </div>
@@ -328,6 +349,16 @@ const AttachmentPreview = ({ attachment }: { attachment: FileAttachment }) => {
 };
 
 /**
+ * Interface for reconstructed file chunks
+ */
+interface FileChunkInfo {
+  chunks: FileAttachment[];
+  complete: boolean;
+  contentType: string;
+  fileType: FileType;
+}
+
+/**
  * Utilidad para reconstruir archivos fragmentados
  */
 const reconstructFileFromChunks = (chunks: FileAttachment[]): string => {
@@ -344,9 +375,9 @@ const reconstructFileFromChunks = (chunks: FileAttachment[]): string => {
 /**
  * Componente para mostrar archivos reconstruidos de fragmentos
  */
-const ReconstructedAttachment = ({ originalFile, chunks }: { 
+const ReconstructedAttachment = ({ originalFile, fileInfo }: { 
   originalFile: string, 
-  chunks: FileAttachment[] 
+  fileInfo: FileChunkInfo 
 }) => {
   const [expanded, setExpanded] = useState(false);
   const [fullscreenView, setFullscreenView] = useState(false);
@@ -364,8 +395,7 @@ const ReconstructedAttachment = ({ originalFile, chunks }: {
     setFullscreenView(false);
   };
   
-  const fileType = chunks[0]?.fileType;
-  const contentType = chunks[0]?.contentType;
+  const { fileType, contentType, chunks } = fileInfo;
   const fullData = reconstructFileFromChunks(chunks);
   const base64Src = `data:${contentType};base64,${fullData}`;
   
@@ -406,7 +436,7 @@ const ReconstructedAttachment = ({ originalFile, chunks }: {
                       </svg>
                     ) : (
                       <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
-                        <path fillRule="evenodd" d="M10 5a1 1 0 011 1v3h3a1 1 0 110 2h-3v3a1 1 0 11-2 0v-3H6a1 1 0 110-2h3V6a1 1 0 011-1z" clipRule="evenodd" />
+                        <path fillRule="evenodd" d="M10 5a1 1 0 011 1v3h3a1 1 0 110 2h-3v3a1 1 0 01-1 1h-3a1 1 0 110-2h3V9a1 1 0 011-1z" clipRule="evenodd" />
                       </svg>
                     )}
                   </button>
@@ -487,78 +517,138 @@ const ReconstructedAttachment = ({ originalFile, chunks }: {
 };
 
 interface FileChunkMap {
-  [filename: string]: {
-    chunks: FileAttachment[];
-    complete: boolean;
-    contentType: string;
-    fileType: FileType;
-  };
+  [filename: string]: FileChunkInfo;
 }
 
 export default function MessageList() {
+  const { messages, typingUsers, uploadingFiles, retryFileUpload, cancelFileUpload } = useChat();
   const { user } = useAuth();
-  const { messages, isLoading, typingUsers, activeChat } = useChat();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [failedImages, setFailedImages] = useState<Record<string, boolean>>({});
   const [fileChunks, setFileChunks] = useState<FileChunkMap>({});
 
-  const handleImageError = (id: string) => {
+  // Scroll to bottom when messages change
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  // Handle failed image loads
+  const handleImageError = (senderId: string) => {
     setFailedImages(prev => ({
       ...prev,
-      [id]: true
+      [senderId]: true
     }));
   };
 
-  // Función para procesar los mensajes y detectar fragmentos de archivos
+  // Reconstruir archivos fragmentados
   useEffect(() => {
-    // Objeto para rastrear los chunks de archivos
+    // Buscar todos los chunks en los mensajes
     const chunks: FileChunkMap = {};
     
-    // Procesar cada mensaje para detectar chunks
     messages.forEach(message => {
       if (!message.attachments) return;
       
       message.attachments.forEach(attachment => {
-        // Si es un chunk, lo agregamos a nuestro mapa
-        if (attachment.isChunk && attachment.originalFilename && 
-            attachment.totalChunks && attachment.chunkIndex !== undefined) {
-          
-          const key = attachment.originalFilename;
-          
-          if (!chunks[key]) {
-            chunks[key] = {
-              chunks: Array(attachment.totalChunks).fill(null).map(() => ({} as FileAttachment)),
+        if (attachment.isChunk && attachment.originalFilename) {
+          if (!chunks[attachment.originalFilename]) {
+            chunks[attachment.originalFilename] = {
+              chunks: [],
               complete: false,
               contentType: attachment.contentType,
               fileType: attachment.fileType
             };
           }
-          
-          // Almacenar el chunk en su posición correcta
-          chunks[key].chunks[attachment.chunkIndex] = attachment;
-          
-          // Verificar si tenemos todos los chunks completamente definidos
-          chunks[key].complete = chunks[key].chunks.every(chunk => 
-            chunk && chunk.data && chunk.filename);
+          chunks[attachment.originalFilename].chunks.push(attachment);
         }
       });
+    });
+    
+    // Verificar si los archivos están completos
+    Object.keys(chunks).forEach(filename => {
+      const info = chunks[filename];
+      if (info.chunks.length > 0) {
+        const lastChunk = info.chunks[info.chunks.length - 1];
+        if (lastChunk.chunkIndex !== undefined && lastChunk.totalChunks && 
+            lastChunk.chunkIndex === lastChunk.totalChunks - 1) {
+          info.complete = true;
+        }
+      }
     });
     
     setFileChunks(chunks);
   }, [messages]);
 
-  // Scroll to bottom when messages change
-  useEffect(() => {
-    if (messagesEndRef.current) {
-      messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, [messages]);
+  // Pending uploads section
+  const hasUploadingFiles = Object.keys(uploadingFiles).length > 0;
 
-  if (isLoading) {
+  // Render uploading files
+  const renderUploadingFiles = () => {
+    if (!hasUploadingFiles) return null;
+    
     return (
-      <div className="flex flex-col h-full justify-center items-center p-4">
-        <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-primary-500"></div>
-        <p className="mt-2 text-gray-500">Loading messages...</p>
+      <div className="uploading-files-container my-4 p-3 bg-gray-100 rounded-lg">
+        <h3 className="text-sm font-medium text-gray-700 mb-2">Archivos subiendo...</h3>
+        <div className="uploading-files-list space-y-2">
+          {Object.entries(uploadingFiles).filter(([_, status]) => status.progress < 100).map(([tempId, progress]) => {
+            // Buscamos el archivo correspondiente en los mensajes
+            let file: FileAttachment | undefined;
+            for (const message of messages) {
+              if (message.attachments) {
+                file = message.attachments.find(att => att.tempId === tempId);
+                if (file) break;
+              }
+            }
+            
+            if (!file) return null;
+            
+            return (
+              <UploadingFileItem 
+                key={tempId}
+                file={file}
+                progress={progress.progress}
+                error={progress.error}
+                onRetry={() => retryFileUpload(file!)}
+                onCancel={() => cancelFileUpload(file!)}
+              />
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
+  if (Object.keys(uploadingFiles).length > 0 && !messages.length) {
+    return (
+      <div className="flex flex-col h-full">
+        <div className="p-4">
+          <div className="uploading-files-container p-3 bg-gray-100 rounded-lg">
+            <h3 className="text-sm font-medium text-gray-700 mb-2">Archivos subiendo...</h3>
+            <div className="uploading-files-list space-y-2">
+              {Object.entries(uploadingFiles).filter(([_, status]) => status.progress < 100).map(([tempId, status]) => {
+                // Como no hay mensajes todavía, creamos un objeto temporal
+                // solo para la visualización
+                const tempFile: FileAttachment = {
+                  tempId,
+                  filename: `Archivo ${tempId}`,
+                  contentType: 'application/octet-stream',
+                  fileType: FileType.DOCUMENT
+                };
+                
+                return (
+                  <UploadingFileItem
+                    key={tempId}
+                    file={tempFile}
+                    progress={status.progress}
+                    error={status.error}
+                    onRetry={() => retryFileUpload(tempFile)}
+                    onCancel={() => cancelFileUpload(tempFile)}
+                  />
+                );
+              })}
+            </div>
+          </div>
+        </div>
+        <div ref={messagesEndRef} />
       </div>
     );
   }
@@ -595,6 +685,7 @@ export default function MessageList() {
 
   return (
     <div className="flex flex-col h-full overflow-y-auto p-4 space-y-4">
+      {renderUploadingFiles()}
       {Object.entries(messagesByDate).map(([date, dateMessages]) => (
         <div key={date} className="space-y-4">
           <div className="flex justify-center">
@@ -690,7 +781,40 @@ export default function MessageList() {
           })}
         </div>
       ))}
-
+      
+      {/* Mostrar archivos que se están cargando actualmente */}
+      {Object.keys(uploadingFiles).length > 0 && (
+        <div className="mb-4 p-3 rounded-lg bg-white shadow border border-gray-200">
+          <div className="text-sm font-medium mb-3 text-gray-700 flex items-center">
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3V10" />
+            </svg>
+            Archivos en proceso
+          </div>
+          <div className="space-y-2 mt-2">
+            {Object.entries(uploadingFiles).filter(([_, status]) => status.progress < 100).map(([tempId, status]) => {
+              // Buscar el archivo correspondiente en el contexto
+              const file = messages.flatMap(msg => 
+                msg.attachments?.filter(att => att.tempId === tempId) || []
+              )[0];
+              
+              if (!file) return null;
+              
+              return (
+                <UploadingFileItem
+                  key={tempId}
+                  file={file}
+                  progress={status.progress}
+                  error={status.error}
+                  onRetry={() => retryFileUpload(file)}
+                  onCancel={() => cancelFileUpload(file)}
+                />
+              );
+            })}
+          </div>
+        </div>
+      )}
+      
       {/* Mostramos los archivos reconstruidos (solo si están completos) */}
       {Object.entries(fileChunks)
         .filter(([_, info]) => info.complete)
@@ -701,7 +825,7 @@ export default function MessageList() {
             </div>
             <ReconstructedAttachment 
               originalFile={filename} 
-              chunks={info.chunks} 
+              fileInfo={info} 
             />
           </div>
         ))

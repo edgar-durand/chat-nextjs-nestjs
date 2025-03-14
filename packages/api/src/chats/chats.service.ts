@@ -29,6 +29,20 @@ export class ChatsService {
     
     if (createMessageDto.attachments && createMessageDto.attachments.length > 0) {
       for (const attachment of createMessageDto.attachments) {
+        // Comprobar si este archivo ya ha sido cargado previamente
+        if (attachment.isLargeFile && attachment.fileId) {
+          // Ya tenemos el fileId, no es necesario procesar - solo pasar el adjunto
+          processedAttachments.push({
+            filename: attachment.filename,
+            contentType: attachment.contentType,
+            fileType: attachment.fileType,
+            size: attachment.size,
+            fileId: attachment.fileId,
+            isLargeFile: true
+          });
+          continue;
+        }
+        
         // Obtener el tamaño real de los datos
         const base64Size = attachment.data ? Buffer.from(attachment.data, 'base64').length : 0;
         const fileSize = attachment.size || base64Size;
@@ -47,6 +61,11 @@ export class ChatsService {
         // Para archivos grandes (especialmente videos), los almacenamos por separado
         if (fileSize > this.INLINE_FILE_SIZE_LIMIT) {
           try {
+            // Verificar que tengamos datos para procesar
+            if (!attachment.data) {
+              throw new BadRequestException('Missing file data for large file upload');
+            }
+            
             // Convertir base64 a buffer para almacenamiento
             const fileBuffer = Buffer.from(attachment.data, 'base64');
             

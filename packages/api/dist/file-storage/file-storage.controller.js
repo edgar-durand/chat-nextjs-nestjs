@@ -14,6 +14,7 @@ var __param = (this && this.__param) || function (paramIndex, decorator) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.FileStorageController = void 0;
 const common_1 = require("@nestjs/common");
+const platform_express_1 = require("@nestjs/platform-express");
 const file_storage_service_1 = require("./file-storage.service");
 let FileStorageController = class FileStorageController {
     constructor(fileStorageService) {
@@ -35,6 +36,28 @@ let FileStorageController = class FileStorageController {
         }
         catch (error) {
             throw new common_1.HttpException(`Failed to upload chunk: ${error.message}`, common_1.HttpStatus.INTERNAL_SERVER_ERROR);
+        }
+    }
+    async uploadFile(file, metadata) {
+        try {
+            console.log(`Recibiendo archivo: ${file.originalname}, tamaño: ${file.size / 1024 / 1024}MB`);
+            const contentType = metadata.contentType || file.mimetype;
+            const fileId = await this.fileStorageService.uploadCompleteFile(file.buffer, {
+                originalFilename: file.originalname,
+                contentType: contentType,
+                size: file.size
+            });
+            return {
+                success: true,
+                fileId,
+                filename: file.originalname,
+                size: file.size,
+                contentType: contentType
+            };
+        }
+        catch (error) {
+            console.error('Error al subir archivo:', error);
+            throw new common_1.HttpException(`Error al subir archivo: ${error.message}`, common_1.HttpStatus.INTERNAL_SERVER_ERROR);
         }
     }
     async getFile(fileId, res) {
@@ -99,6 +122,20 @@ __decorate([
     __metadata("design:paramtypes", [Object]),
     __metadata("design:returntype", Promise)
 ], FileStorageController.prototype, "uploadChunk", null);
+__decorate([
+    (0, common_1.Post)('upload'),
+    (0, common_1.UseInterceptors)((0, platform_express_1.FileInterceptor)('file')),
+    __param(0, (0, common_1.UploadedFile)(new common_1.ParseFilePipeBuilder()
+        .addMaxSizeValidator({ maxSize: 1024 * 1024 * 100 })
+        .build({
+        fileIsRequired: true,
+        errorHttpStatusCode: common_1.HttpStatus.BAD_REQUEST,
+    }))),
+    __param(1, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object, Object]),
+    __metadata("design:returntype", Promise)
+], FileStorageController.prototype, "uploadFile", null);
 __decorate([
     (0, common_1.Get)(':fileId'),
     __param(0, (0, common_1.Param)('fileId')),

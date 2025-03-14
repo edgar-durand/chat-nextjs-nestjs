@@ -109,25 +109,19 @@ export class FileStorageService {
   }
 
   /**
-   * Sube un archivo completo en una sola operación
-   * @param buffer Datos binarios del archivo completo
-   * @param metadata Metadatos del archivo
+   * Servicio mejorado para cargar archivos completos en una única operación
+   * Optimizado para archivos grandes como videos
    */
   async uploadCompleteFile(
     buffer: Buffer, 
-    metadata: { originalFilename: string, contentType: string, size: number }
+    metadata: { originalFilename: string; contentType: string; size: number }
   ): Promise<string> {
     try {
-      console.log(`Iniciando carga de archivo grande: ${metadata.originalFilename}, tamaño: ${metadata.size / 1024 / 1024}MB, tipo: ${metadata.contentType}`);
-      
-      // Validar que el buffer tenga datos
-      if (!buffer || buffer.length === 0) {
-        throw new Error('El buffer está vacío');
-      }
-      
-      // Validar que el tamaño del buffer coincida aproximadamente con el tamaño reportado
-      if (Math.abs(buffer.length - metadata.size) > metadata.size * 0.1) {
-        console.warn(`Advertencia: Discrepancia en el tamaño del archivo. Reportado: ${metadata.size}, Recibido: ${buffer.length}`);
+      console.log(`Procesando archivo: ${metadata.originalFilename} (${metadata.size / 1024 / 1024}MB)`);
+
+      // Verificar tamaño del archivo para debug
+      if (buffer.length !== metadata.size) {
+        console.warn(`Tamaño declarado (${metadata.size}) no coincide con tamaño real (${buffer.length})`);
       }
 
       // Generar un nombre de archivo único para evitar colisiones
@@ -146,8 +140,14 @@ export class FileStorageService {
         storeInFilesystem = true;
         console.log(`Archivo demasiado grande para MongoDB (${buffer.length / 1024 / 1024}MB), guardando en el sistema de archivos: ${filePath}`);
         
-        // Escribir el archivo en el sistema de archivos
-        await fs.promises.writeFile(filePath, buffer);
+        try {
+          // Escribir el archivo en el sistema de archivos
+          await fs.promises.writeFile(filePath, buffer);
+          console.log(`Archivo guardado exitosamente en: ${filePath}`);
+        } catch (fsError) {
+          console.error('Error escribiendo archivo al sistema de archivos:', fsError);
+          throw new Error(`Error guardando archivo: ${fsError.message}`);
+        }
         
         // Crear documento en MongoDB sólo con los metadatos (sin el buffer)
         newFile = new this.fileStorageModel({
@@ -184,7 +184,7 @@ export class FileStorageService {
 
       console.log(`Guardando metadatos en base de datos: ${metadata.originalFilename}`);
       const savedFile = await newFile.save();
-      console.log(`Archivo guardado exitosamente: ${savedFile._id.toString()}`);
+      console.log(`Archivo registrado exitosamente con ID: ${savedFile._id.toString()}`);
       return savedFile._id.toString();
     } catch (error) {
       console.error('Error al guardar archivo completo:', error);

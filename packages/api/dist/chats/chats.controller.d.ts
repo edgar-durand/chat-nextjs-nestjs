@@ -19,7 +19,7 @@ export declare class ChatsController {
         deletedCount?: undefined;
     }>;
     findRoomMessages(roomId: string): Promise<Message[]>;
-    getFile(fileId: string, preview: string, res: Response): Promise<Response<any, Record<string, any>>>;
+    getFile(fileId: string, preview: string, res: Response, req: any): Promise<Response<any, Record<string, any>>>;
     getFileThumbnail(fileId: string, res: Response): Promise<Response<any, Record<string, any>>>;
     markAsRead(id: string): Promise<Message>;
     getUnreadCount(req: any): Promise<{
