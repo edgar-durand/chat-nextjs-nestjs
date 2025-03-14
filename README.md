@@ -34,6 +34,37 @@ A modern real-time chat application built with NestJS and NextJS in a monorepo s
    ```
 3. Set up environment variables (see [Environment Variables](#environment-variables) section)
 
+### Running with Docker
+
+The application can be deployed using Docker and Docker Compose:
+
+1. Make sure Docker and Docker Compose are installed on your system
+2. Configure environment variables:
+   - Update the MongoDB URI in `docker-compose.yml` if needed
+   - Set Google OAuth credentials as environment variables or directly in `docker-compose.yml`
+3. Build and start the containers:
+   ```
+   docker-compose up -d --build
+   ```
+4. Access the application:
+   - Frontend: http://localhost:3000
+   - Backend API: http://localhost:3001
+
+To stop the containers:
+```
+docker-compose down
+```
+
+#### Production Deployment
+
+For production deployment:
+
+1. Update environment variables in the `docker-compose.yml` file:
+   - Set appropriate `NEXTAUTH_URL` 
+   - Configure secure secrets for `JWT_SECRET` and `NEXTAUTH_SECRET`
+   - Set proper `CORS_ORIGIN` values
+2. For Google Authentication, ensure your OAuth credentials are configured for your production domain
+
 ### Environment Variables
 
 Create the following `.env` files in their respective directories:
@@ -110,4 +141,3 @@ chat/
 │   └── web/          # NextJS frontend
 ├── turbo.json        # Turborepo configuration
 └── package.json      # Root package.json
-```
