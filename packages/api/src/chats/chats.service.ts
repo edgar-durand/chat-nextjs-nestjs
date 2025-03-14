@@ -324,4 +324,51 @@ export class ChatsService {
       throw new BadRequestException(`No se pudo eliminar el mensaje: ${error.message}`);
     }
   }
+
+  /**
+   * Reenvía un mensaje a otro usuario o sala de chat
+   */
+  async forwardMessage(
+    messageId: string,
+    targetType: 'private' | 'room',
+    targetId: string,
+    senderId: string
+  ): Promise<Message> {
+    try {
+      // Buscar el mensaje original
+      const originalMessage = await this.messageModel.findById(messageId);
+      
+      if (!originalMessage) {
+        throw new NotFoundException(`Mensaje con ID ${messageId} no encontrado`);
+      }
+      
+      // Crear un nuevo mensaje basado en el original
+      const newMessageData: any = {
+        sender: senderId,
+        content: originalMessage.content,
+        attachments: originalMessage.attachments,
+        isRead: false,
+      };
+      
+      // Configurar el destinatario según el tipo de destino
+      if (targetType === 'private') {
+        newMessageData.recipient = targetId;
+      } else {
+        newMessageData.room = targetId;
+      }
+      
+      // Guardar el nuevo mensaje
+      const forwardedMessage = await this.messageModel.create(newMessageData);
+      
+      // Poblar el mensaje con los datos del remitente
+      const populatedMessage = await this.messageModel.findById(forwardedMessage._id)
+        .populate('sender', 'name email avatar')
+        .exec();
+      
+      return populatedMessage;
+    } catch (error) {
+      console.error('Error al reenviar mensaje:', error);
+      throw error;
+    }
+  }
 }

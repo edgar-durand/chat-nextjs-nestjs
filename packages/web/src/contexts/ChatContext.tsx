@@ -77,6 +77,7 @@ interface ChatContextType {
   retryFileUpload: (file: FileAttachment) => void;
   cancelFileUpload: (file: FileAttachment) => void;
   deleteMessage: (messageId: string, deleteForEveryone: boolean) => Promise<boolean>;
+  forwardMessage: (messageId: string, targetType: 'private' | 'room', targetId: string) => Promise<void>;
 }
 
 const ChatContext = createContext<ChatContextType>({
@@ -99,6 +100,7 @@ const ChatContext = createContext<ChatContextType>({
   retryFileUpload: () => {},
   cancelFileUpload: () => {},
   deleteMessage: async () => false,
+  forwardMessage: async () => {},
 });
 
 export const useChat = () => useContext(ChatContext);
@@ -878,7 +880,39 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return false;
     }
   };
-  
+
+  const forwardMessage = async (messageId: string, targetType: 'private' | 'room', targetId: string) => {
+    try {
+      const response = await axios.post(
+        `${API_URL}/chats/forward/${messageId}`,
+        {
+          targetType,
+          targetId
+        },
+        {
+          headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
+        }
+      );
+
+      if (response.data.success) {
+        // Si el mensaje se reenvió exitosamente, actualizar los mensajes si corresponde
+        const forwardedMessage = response.data.forwardedMessage;
+        
+        // Si estamos viendo la conversación/sala a la que se reenvió el mensaje, agregar el mensaje
+        if (
+          (targetType === 'private' && activeChat?.type === 'private' && activeChat.id === targetId) ||
+          (targetType === 'room' && activeChat?.type === 'room' && activeChat.id === targetId)
+        ) {
+          setMessages(prev => [...prev, forwardedMessage]);
+        }
+        
+        console.log('Mensaje reenviado');
+      }
+    } catch (error) {
+      console.error('Error al reenviar mensaje:', error);
+    }
+  };
+
   return (
     <ChatContext.Provider value={{
       activeChat,
@@ -900,6 +934,7 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
       retryFileUpload,
       cancelFileUpload,
       deleteMessage,
+      forwardMessage
     }}>
       {children}
     </ChatContext.Provider>

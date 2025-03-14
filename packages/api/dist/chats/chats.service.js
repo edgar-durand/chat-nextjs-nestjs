@@ -228,6 +228,35 @@ let ChatsService = class ChatsService {
             throw new common_1.BadRequestException(`No se pudo eliminar el mensaje: ${error.message}`);
         }
     }
+    async forwardMessage(messageId, targetType, targetId, senderId) {
+        try {
+            const originalMessage = await this.messageModel.findById(messageId);
+            if (!originalMessage) {
+                throw new common_1.NotFoundException(`Mensaje con ID ${messageId} no encontrado`);
+            }
+            const newMessageData = {
+                sender: senderId,
+                content: originalMessage.content,
+                attachments: originalMessage.attachments,
+                isRead: false,
+            };
+            if (targetType === 'private') {
+                newMessageData.recipient = targetId;
+            }
+            else {
+                newMessageData.room = targetId;
+            }
+            const forwardedMessage = await this.messageModel.create(newMessageData);
+            const populatedMessage = await this.messageModel.findById(forwardedMessage._id)
+                .populate('sender', 'name email avatar')
+                .exec();
+            return populatedMessage;
+        }
+        catch (error) {
+            console.error('Error al reenviar mensaje:', error);
+            throw error;
+        }
+    }
 };
 exports.ChatsService = ChatsService;
 exports.ChatsService = ChatsService = __decorate([

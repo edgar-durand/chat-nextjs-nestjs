@@ -159,6 +159,22 @@ let ChatsController = class ChatsController {
             };
         }
     }
+    async forwardMessage(messageId, forwardData, req) {
+        try {
+            const result = await this.chatsService.forwardMessage(messageId, forwardData.targetType, forwardData.targetId, req.user._id);
+            return {
+                success: true,
+                message: 'Mensaje reenviado exitosamente',
+                forwardedMessage: result
+            };
+        }
+        catch (error) {
+            return {
+                success: false,
+                message: error.message || 'Error al reenviar el mensaje'
+            };
+        }
+    }
     markAsRead(id) {
         return this.chatsService.markAsRead(id);
     }
@@ -227,6 +243,15 @@ __decorate([
     __metadata("design:paramtypes", [String, String, Object]),
     __metadata("design:returntype", Promise)
 ], ChatsController.prototype, "deleteMessage", null);
+__decorate([
+    (0, common_1.Post)('forward/:messageId'),
+    __param(0, (0, common_1.Param)('messageId')),
+    __param(1, (0, common_1.Body)()),
+    __param(2, (0, common_1.Request)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, Object, Object]),
+    __metadata("design:returntype", Promise)
+], ChatsController.prototype, "forwardMessage", null);
 __decorate([
     (0, common_1.Post)(':id/read'),
     __param(0, (0, common_1.Param)('id')),

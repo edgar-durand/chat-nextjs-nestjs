@@ -32,6 +32,18 @@ export declare class ChatsController {
         message: any;
         deleted?: undefined;
     }>;
+    forwardMessage(messageId: string, forwardData: {
+        targetType: 'private' | 'room';
+        targetId: string;
+    }, req: any): Promise<{
+        success: boolean;
+        message: string;
+        forwardedMessage: Message;
+    } | {
+        success: boolean;
+        message: any;
+        forwardedMessage?: undefined;
+    }>;
     markAsRead(id: string): Promise<Message>;
     getUnreadCount(req: any): Promise<{
         count: number;

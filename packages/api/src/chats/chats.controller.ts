@@ -214,6 +214,33 @@ export class ChatsController {
     }
   }
 
+  @Post('forward/:messageId')
+  async forwardMessage(
+    @Param('messageId') messageId: string,
+    @Body() forwardData: { targetType: 'private' | 'room', targetId: string },
+    @Request() req
+  ) {
+    try {
+      const result = await this.chatsService.forwardMessage(
+        messageId,
+        forwardData.targetType,
+        forwardData.targetId,
+        req.user._id
+      );
+      
+      return { 
+        success: true, 
+        message: 'Mensaje reenviado exitosamente',
+        forwardedMessage: result
+      };
+    } catch (error) {
+      return {
+        success: false,
+        message: error.message || 'Error al reenviar el mensaje'
+      };
+    }
+  }
+
   @Post(':id/read')
   markAsRead(@Param('id') id: string): Promise<Message> {
     return this.chatsService.markAsRead(id);

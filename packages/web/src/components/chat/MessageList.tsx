@@ -5,6 +5,7 @@ import Image from 'next/image';
 import { format } from 'date-fns';
 import UploadingFileItem from './UploadingFileItem';
 import DeleteMessageModal from '../common/DeleteMessageModal';
+import ForwardMessageModal from '../common/ForwardMessageModal';
 
 /**
  * Helper function to get initials from a name
@@ -529,6 +530,17 @@ export default function MessageList() {
   const [fileChunks, setFileChunks] = useState<FileChunkMap>({});
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [messageToDelete, setMessageToDelete] = useState<string | null>(null);
+  const [forwardModalOpen, setForwardModalOpen] = useState(false);
+  const [selectedMessageForForward, setSelectedMessageForForward] = useState<{
+    id: string;
+    content: string;
+    sender: {
+      _id: string;
+      name: string;
+      avatar?: string;
+    };
+    date: string;
+  } | null>(null);
 
   // Scroll to bottom when messages change
   useEffect(() => {
@@ -692,6 +704,20 @@ export default function MessageList() {
     setDeleteModalOpen(true);
   };
 
+  const handleForwardClick = (message: any) => {
+    setSelectedMessageForForward({
+      id: message._id,
+      content: message.content || '',
+      sender: {
+        _id: message.sender._id,
+        name: message.sender.name,
+        avatar: message.sender.avatar
+      },
+      date: message.createdAt
+    });
+    setForwardModalOpen(true);
+  };
+
   // Función para eliminar mensaje solo para mí
   const handleDeleteForMe = async () => {
     if (messageToDelete) {
@@ -815,15 +841,39 @@ export default function MessageList() {
                       {format(new Date(message.createdAt), 'h:mm a')}
                     </div>
                     {isOwnMessage && (
-                      <button 
-                        className="absolute bottom-1 right-1 text-xs text-white bg-gray-500 hover:bg-red-500 p-1 rounded-full transition-all opacity-0 group-hover:opacity-100 z-10"
-                        onClick={() => handleDeleteClick(message._id)}
-                        aria-label="Delete message"
-                      >
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor">
-                          <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clipRule="evenodd" />
-                        </svg>
-                      </button>
+                      <div className="absolute bottom-1 right-1 flex space-x-1">
+                        <button 
+                          className="text-xs text-white bg-gray-500 hover:bg-red-500 p-1 rounded-full transition-all opacity-0 group-hover:opacity-100 z-10"
+                          onClick={() => handleDeleteClick(message._id)}
+                          aria-label="Delete message"
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor">
+                            <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clipRule="evenodd" />
+                          </svg>
+                        </button>
+                        <button
+                          className="text-xs text-white bg-gray-500 hover:bg-primary-500 p-1 rounded-full transition-all opacity-0 group-hover:opacity-100 z-10"
+                          onClick={() => handleForwardClick(message)}
+                          aria-label="Forward message"
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor">
+                            <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-8.707l-3-3a1 1 0 00-1.414 1.414L10.586 9H7a1 1 0 100 2h3.586l-1.293 1.293a1 1 0 101.414 1.414l3-3a1 1 0 000-1.414z" clipRule="evenodd" />
+                          </svg>
+                        </button>
+                      </div>
+                    )}
+                    {!isOwnMessage && (
+                      <div className="absolute bottom-1 left-1 flex space-x-1">
+                        <button
+                          className="text-xs text-white bg-gray-500 hover:bg-primary-500 p-1 rounded-full transition-all opacity-0 group-hover:opacity-100 z-10"
+                          onClick={() => handleForwardClick(message)}
+                          aria-label="Forward message"
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor">
+                            <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-8.707l-3-3a1 1 0 00-1.414 1.414L10.586 9H7a1 1 0 100 2h3.586l-1.293 1.293a1 1 0 101.414 1.414l3-3a1 1 0 000-1.414z" clipRule="evenodd" />
+                          </svg>
+                        </button>
+                      </div>
                     )}
                   </div>
                 </div>
@@ -907,6 +957,19 @@ export default function MessageList() {
           onDeleteForMe={handleDeleteForMe}
           onDeleteForEveryone={handleDeleteForEveryone}
           canDeleteForEveryone={true}
+        />
+      )}
+      {forwardModalOpen && selectedMessageForForward && (
+        <ForwardMessageModal
+          isOpen={forwardModalOpen}
+          onClose={() => {
+            setForwardModalOpen(false);
+            setSelectedMessageForForward(null);
+          }}
+          messageId={selectedMessageForForward.id}
+          messageContent={selectedMessageForForward.content}
+          messageSender={selectedMessageForForward.sender}
+          messageDate={selectedMessageForForward.date}
         />
       )}
     </div>

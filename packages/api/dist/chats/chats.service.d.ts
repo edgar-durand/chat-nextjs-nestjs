@@ -18,4 +18,5 @@ export declare class ChatsService {
         deletedCount: number;
     }>;
     deleteMessage(messageId: string, userId: string, deleteForEveryone: boolean): Promise<any>;
+    forwardMessage(messageId: string, targetType: 'private' | 'room', targetId: string, senderId: string): Promise<Message>;
 }
