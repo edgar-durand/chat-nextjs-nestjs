@@ -194,8 +194,40 @@ let FileStorageService = class FileStorageService {
         }));
     }
     async deleteFile(fileId) {
-        const result = await this.fileStorageModel.deleteOne({ _id: fileId });
-        return result.deletedCount > 0;
+        try {
+            const file = await this.fileStorageModel.findById(fileId);
+            if (!file) {
+                console.log(`Archivo con ID ${fileId} no encontrado para eliminar`);
+                return false;
+            }
+            if (file.storedInFilesystem && file.filePath) {
+                try {
+                    if (fs.existsSync(file.filePath)) {
+                        fs.unlinkSync(file.filePath);
+                        console.log(`Archivo físico eliminado: ${file.filePath}`);
+                    }
+                    else {
+                        console.warn(`Archivo físico no encontrado: ${file.filePath}`);
+                    }
+                }
+                catch (error) {
+                    console.error(`Error eliminando archivo físico ${file.filePath}:`, error);
+                }
+            }
+            const result = await this.fileStorageModel.deleteOne({ _id: fileId });
+            const success = result.deletedCount > 0;
+            if (success) {
+                console.log(`Registro de archivo con ID ${fileId} eliminado exitosamente`);
+            }
+            else {
+                console.warn(`No se pudo eliminar el registro del archivo con ID ${fileId}`);
+            }
+            return success;
+        }
+        catch (error) {
+            console.error(`Error durante la eliminación del archivo ${fileId}:`, error);
+            return false;
+        }
     }
 };
 exports.FileStorageService = FileStorageService;

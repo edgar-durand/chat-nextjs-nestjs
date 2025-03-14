@@ -68,6 +68,9 @@ export class Message extends Document {
   @Prop({ type: [MongooseSchema.Types.ObjectId], default: [] })
   deletedFor: User[]; // IDs de usuarios que han borrado este mensaje de su vista
 
+  @Prop({ default: false })
+  deletedForEveryone: boolean; // Indica si el mensaje ha sido eliminado para todos
+
   @Prop({ default: Date.now })
   createdAt: Date;
 }

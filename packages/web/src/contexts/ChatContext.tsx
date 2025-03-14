@@ -69,13 +69,14 @@ interface ChatContextType {
   unreadMessages: Record<string, number>;
   uploadingFiles: Record<string, { progress: number, error?: string }>;
   setActiveChat: (chat: { type: 'private' | 'room', id: string } | null) => void;
-  sendMessage: (content: string, attachments?: File[]) => Promise<void>;
+  sendMessage: (content: string, selectedFile: File | null) => Promise<void>;
   markAsRead: (messageId: string) => void;
   startTyping: () => void;
   stopTyping: () => void;
-  loadMoreMessages: (beforeMessageId: string) => Promise<number>;
+  loadMoreMessages: (page: number) => Promise<number>;
   retryFileUpload: (file: FileAttachment) => void;
   cancelFileUpload: (file: FileAttachment) => void;
+  deleteMessage: (messageId: string, deleteForEveryone: boolean) => Promise<boolean>;
 }
 
 const ChatContext = createContext<ChatContextType>({
@@ -97,6 +98,7 @@ const ChatContext = createContext<ChatContextType>({
   loadMoreMessages: async () => 0,
   retryFileUpload: () => {},
   cancelFileUpload: () => {},
+  deleteMessage: async () => false,
 });
 
 export const useChat = () => useContext(ChatContext);
@@ -292,6 +294,15 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
       } else {
         // Update the room in the list
         setRooms(prev => prev.map(r => r._id === room._id ? room : r));
+      }
+    });
+    
+    // Escuchar eventos de eliminación de mensajes
+    socketRef.current.on('message_deleted', ({ messageId, deleteForEveryone }) => {
+      console.log('Mensaje eliminado recibido:', messageId, deleteForEveryone);
+      if (deleteForEveryone) {
+        // Si fue eliminado para todos, actualizar la UI
+        setMessages(prev => prev.filter(msg => msg._id !== messageId));
       }
     });
     
@@ -512,98 +523,96 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return () => clearInterval(cleanupInterval);
   }, []);
 
-  const sendMessage = async (content: string, attachments?: File[]) => {
+  const sendMessage = async (content: string, selectedFile: File | null) => {
     if (!socketRef.current || !activeChat) return;
     
     try {
       // Generar tempIds para los archivos y convertirlos a FileAttachment
       const attachmentsWithIds: FileAttachment[] = [];
       
-      if (attachments && attachments.length > 0) {
-        for (const file of attachments) {
-          const tempId = `temp-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+      if (selectedFile) {
+        const tempId = `temp-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+        
+        // Determinar tipo de archivo de forma segura
+        let fileType = FileType.DOCUMENT;
+        const fileTypeString = selectedFile.type || ''; // Usar string vacío si type es undefined
+        if (fileTypeString.startsWith('image/')) {
+          fileType = FileType.IMAGE;
+        } else if (fileTypeString.startsWith('video/')) {
+          fileType = FileType.VIDEO;
+        } else if (fileTypeString.startsWith('audio/')) {
+          fileType = FileType.AUDIO;
+        } else {
+          fileType = FileType.DOCUMENT;
+        }
+        
+        // Crear objeto FileAttachment para el archivo
+        const attachment: FileAttachment = {
+          tempId,
+          filename: selectedFile.name || 'archivo',
+          contentType: selectedFile.type || 'application/octet-stream',
+          fileType,
+          size: selectedFile.size || 0
+        };
+        
+        // Iniciar indicador de carga inmediatamente para todos los archivos
+        const chatId = `${activeChat?.type}-${activeChat?.id}`;
+        updateUploadingFiles(chatId!, tempId, { progress: 0, error: undefined });
+        
+        // Si es un archivo grande, lo procesamos para subida en segundo plano
+        if (selectedFile.size > 5 * 1024 * 1024) { // Más de 5MB
+          attachment.isLargeFile = true;
           
-          // Determinar tipo de archivo de forma segura
-          let fileType = FileType.DOCUMENT;
-          const fileTypeString = file.type || ''; // Usar string vacío si type es undefined
-          if (fileTypeString.startsWith('image/')) {
-            fileType = FileType.IMAGE;
-          } else if (fileTypeString.startsWith('video/')) {
-            fileType = FileType.VIDEO;
-          } else if (fileTypeString.startsWith('audio/')) {
-            fileType = FileType.AUDIO;
-          } else {
-            fileType = FileType.DOCUMENT;
-          }
+          // Leer como base64 para preprocesamiento
+          const reader = new FileReader();
+          reader.readAsDataURL(selectedFile);
+          await new Promise<void>((resolve) => {
+            reader.onload = () => {
+              const base64data = reader.result?.toString() || '';
+              // Quitar el prefijo (ej. "data:image/jpeg;base64,")
+              const base64Clean = base64data.split(',')[1];
+              attachment.data = base64Clean;
+              resolve();
+            };
+          });
           
-          // Crear objeto FileAttachment para el archivo
-          const attachment: FileAttachment = {
-            tempId,
-            filename: file.name || 'archivo',
-            contentType: file.type || 'application/octet-stream',
-            fileType,
-            size: file.size || 0
-          };
+          // Agregar a la lista de adjuntos
+          attachmentsWithIds.push(attachment);
           
-          // Iniciar indicador de carga inmediatamente para todos los archivos
-          const chatId = `${activeChat?.type}-${activeChat?.id}`;
-          updateUploadingFiles(chatId!, tempId, { progress: 0, error: undefined });
+          // Iniciar subida en segundo plano
+          uploadLargeFileToServer(attachment).then(fileId => {
+            if (fileId) {
+              // Actualizar el attachment con el fileId
+              attachment.fileId = fileId;
+              attachment.isLargeFile = true;
+              attachment.data = undefined; // Eliminar los datos binarios
+              
+              // Actualizar progreso a 100%
+              updateUploadingFiles(chatId, tempId, { progress: 100, error: undefined });
+            }
+          }).catch(error => {
+            console.error('Error subiendo archivo:', error);
+            updateUploadingFiles(chatId, tempId, { progress: 0, error: error.message || 'Error al subir el archivo' });
+          });
+        } else {
+          // Para archivos pequeños (<5MB), leerlos como base64 y enviar con el mensaje
+          const reader = new FileReader();
+          reader.readAsDataURL(selectedFile);
+          await new Promise<void>((resolve) => {
+            reader.onload = () => {
+              const base64data = reader.result?.toString() || '';
+              // Quitar el prefijo (ej. "data:image/jpeg;base64,")
+              const base64Clean = base64data.split(',')[1];
+              attachment.data = base64Clean;
+              resolve();
+            };
+          });
           
-          // Si es un archivo grande, lo procesamos para subida en segundo plano
-          if (file.size > 5 * 1024 * 1024) { // Más de 5MB
-            attachment.isLargeFile = true;
-            
-            // Leer como base64 para preprocesamiento
-            const reader = new FileReader();
-            reader.readAsDataURL(file);
-            await new Promise<void>((resolve) => {
-              reader.onload = () => {
-                const base64data = reader.result?.toString() || '';
-                // Quitar el prefijo (ej. "data:image/jpeg;base64,")
-                const base64Clean = base64data.split(',')[1];
-                attachment.data = base64Clean;
-                resolve();
-              };
-            });
-            
-            // Agregar a la lista de adjuntos
-            attachmentsWithIds.push(attachment);
-            
-            // Iniciar subida en segundo plano
-            uploadLargeFileToServer(attachment).then(fileId => {
-              if (fileId) {
-                // Actualizar el attachment con el fileId
-                attachment.fileId = fileId;
-                attachment.isLargeFile = true;
-                attachment.data = undefined; // Eliminar los datos binarios
-                
-                // Actualizar progreso a 100%
-                updateUploadingFiles(chatId, tempId, { progress: 100, error: undefined });
-              }
-            }).catch(error => {
-              console.error('Error subiendo archivo:', error);
-              updateUploadingFiles(chatId, tempId, { progress: 0, error: error.message || 'Error al subir el archivo' });
-            });
-          } else {
-            // Para archivos pequeños (<5MB), leerlos como base64 y enviar con el mensaje
-            const reader = new FileReader();
-            reader.readAsDataURL(file);
-            await new Promise<void>((resolve) => {
-              reader.onload = () => {
-                const base64data = reader.result?.toString() || '';
-                // Quitar el prefijo (ej. "data:image/jpeg;base64,")
-                const base64Clean = base64data.split(',')[1];
-                attachment.data = base64Clean;
-                resolve();
-              };
-            });
-            
-            // Agregar a la lista de adjuntos
-            attachmentsWithIds.push(attachment);
-            
-            // Marcar como completado también para archivos pequeños
-            updateUploadingFiles(chatId, tempId, { progress: 100, error: undefined });
-          }
+          // Agregar a la lista de adjuntos
+          attachmentsWithIds.push(attachment);
+          
+          // Marcar como completado también para archivos pequeños
+          updateUploadingFiles(chatId, tempId, { progress: 100, error: undefined });
         }
       }
       
@@ -826,16 +835,16 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
   
   // Esta función carga más mensajes para la paginación
-  const fetchMoreMessages = async (beforeMessageId: string) => {
+  const fetchMoreMessages = async (page: number) => {
     if (!activeChat || !user || !isAuthenticated) return;
     
     try {
       let endpoint = '';
       
       if (activeChat.type === 'private') {
-        endpoint = `${API_URL}/chats/direct/${activeChat.id}?before=${beforeMessageId}`;
+        endpoint = `${API_URL}/chats/direct/${activeChat.id}?page=${page}`;
       } else {
-        endpoint = `${API_URL}/chats/room/${activeChat.id}?before=${beforeMessageId}`;
+        endpoint = `${API_URL}/chats/room/${activeChat.id}?page=${page}`;
       }
       
       const response = await axios.get(endpoint);
@@ -847,6 +856,26 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } catch (error) {
       console.error('Error al cargar más mensajes:', error);
       return 0;
+    }
+  };
+  
+  const deleteMessage = async (messageId: string, deleteForEveryone: boolean) => {
+    try {
+      const response = await axios.delete(`${API_URL}/chats/message/${messageId}`, {
+        params: {
+          deleteForEveryone,
+        },
+      });
+      
+      if (response.data.success) {
+        // Eliminar el mensaje del estado local
+        setMessages(prev => prev.filter(msg => msg._id !== messageId));
+        return true;
+      }
+      return false;
+    } catch (error) {
+      console.error('Error al eliminar mensaje:', error);
+      return false;
     }
   };
   
@@ -869,7 +898,8 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
       stopTyping: () => setTyping(false),
       loadMoreMessages: fetchMoreMessages,
       retryFileUpload,
-      cancelFileUpload
+      cancelFileUpload,
+      deleteMessage,
     }}>
       {children}
     </ChatContext.Provider>

@@ -25,6 +25,7 @@ export declare class Message extends Document {
     room?: Room;
     isRead: boolean;
     deletedFor: User[];
+    deletedForEveryone: boolean;
     createdAt: Date;
 }
 export declare const MessageSchema: MongooseSchema<Message, import("mongoose").Model<Message, any, any, any, Document<unknown, any, Message> & Message & {

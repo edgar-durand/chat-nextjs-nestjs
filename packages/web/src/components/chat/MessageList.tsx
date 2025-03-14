@@ -4,6 +4,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import Image from 'next/image';
 import { format } from 'date-fns';
 import UploadingFileItem from './UploadingFileItem';
+import DeleteMessageModal from '../common/DeleteMessageModal';
 
 /**
  * Helper function to get initials from a name
@@ -521,11 +522,13 @@ interface FileChunkMap {
 }
 
 export default function MessageList() {
-  const { messages, typingUsers, uploadingFiles, retryFileUpload, cancelFileUpload } = useChat();
+  const { messages, typingUsers, uploadingFiles, retryFileUpload, cancelFileUpload, deleteMessage } = useChat();
   const { user } = useAuth();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [failedImages, setFailedImages] = useState<Record<string, boolean>>({});
   const [fileChunks, setFileChunks] = useState<FileChunkMap>({});
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [messageToDelete, setMessageToDelete] = useState<string | null>(null);
 
   // Scroll to bottom when messages change
   useEffect(() => {
@@ -683,6 +686,40 @@ export default function MessageList() {
     .filter(([userId, isTyping]) => isTyping && userId !== user?.id)
     .map(([userId, value]) => typeof value === 'string' ? value : userId);
 
+  // Función para manejar la eliminación de mensajes
+  const handleDeleteClick = (messageId: string) => {
+    setMessageToDelete(messageId);
+    setDeleteModalOpen(true);
+  };
+
+  // Función para eliminar mensaje solo para mí
+  const handleDeleteForMe = async () => {
+    if (messageToDelete) {
+      const success = await deleteMessage(messageToDelete, false);
+      if (success) {
+        console.log('Mensaje eliminado para mí');
+      } else {
+        console.error('Error al eliminar mensaje');
+      }
+    }
+    setDeleteModalOpen(false);
+    setMessageToDelete(null);
+  };
+
+  // Función para eliminar mensaje para todos
+  const handleDeleteForEveryone = async () => {
+    if (messageToDelete) {
+      const success = await deleteMessage(messageToDelete, true);
+      if (success) {
+        console.log('Mensaje eliminado para todos');
+      } else {
+        console.error('Error al eliminar mensaje para todos');
+      }
+    }
+    setDeleteModalOpen(false);
+    setMessageToDelete(null);
+  };
+
   return (
     <div className="flex flex-col h-full overflow-y-auto p-4 space-y-4">
       {renderUploadingFiles()}
@@ -697,8 +734,10 @@ export default function MessageList() {
           </div>
 
           {dateMessages.map((message) => {
-            const isOwnMessage = message.sender._id === user?.id;
-            const senderId = message.sender._id || '';
+            // Corregir la detección de mensajes propios considerando tanto _id como id
+            const isOwnMessage = message.sender._id === user?.id || message.sender.id === user?.id;
+            
+            const senderId = message.sender._id || message.sender.id || '';
             const hasAttachments = message.attachments && message.attachments.length > 0;
 
             const nonChunkAttachments = message.attachments?.filter(att => !att.isChunk) || [];
@@ -717,7 +756,7 @@ export default function MessageList() {
             return (
               <div
                 key={message._id}
-                className={`flex ${isOwnMessage ? 'justify-end' : 'justify-start'}`}
+                className={`flex ${isOwnMessage ? 'justify-end' : 'justify-start'} group relative`}
               >
                 <div className={`flex max-w-xs md:max-w-md lg:max-w-lg ${isOwnMessage ? 'flex-row-reverse' : ''}`}>
                   {!isOwnMessage && (
@@ -747,6 +786,7 @@ export default function MessageList() {
                       : 'bg-gray-200 text-gray-800 rounded-tr-lg rounded-tl-none'
                     }
                     rounded-bl-lg rounded-br-lg p-3 shadow-sm
+                    relative
                   `}>
                     {!isOwnMessage && (
                       <div className="font-medium text-xs mb-1">
@@ -774,6 +814,17 @@ export default function MessageList() {
                     <div className="text-xs mt-1 opacity-80">
                       {format(new Date(message.createdAt), 'h:mm a')}
                     </div>
+                    {isOwnMessage && (
+                      <button 
+                        className="absolute bottom-1 right-1 text-xs text-white bg-gray-500 hover:bg-red-500 p-1 rounded-full transition-all opacity-0 group-hover:opacity-100 z-10"
+                        onClick={() => handleDeleteClick(message._id)}
+                        aria-label="Delete message"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor">
+                          <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clipRule="evenodd" />
+                        </svg>
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>
@@ -849,6 +900,15 @@ export default function MessageList() {
 
       {/* Empty div to allow scrolling to bottom of messages */}
       <div ref={messagesEndRef} />
+      {deleteModalOpen && (
+        <DeleteMessageModal 
+          isOpen={deleteModalOpen}
+          onClose={() => setDeleteModalOpen(false)}
+          onDeleteForMe={handleDeleteForMe}
+          onDeleteForEveryone={handleDeleteForEveryone}
+          canDeleteForEveryone={true}
+        />
+      )}
     </div>
   );
 }

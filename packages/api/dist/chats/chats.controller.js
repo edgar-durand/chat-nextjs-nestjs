@@ -19,10 +19,12 @@ const create_message_dto_1 = require("./dto/create-message.dto");
 const jwt_auth_guard_1 = require("../auth/guards/jwt-auth.guard");
 const file_storage_service_1 = require("../file-storage/file-storage.service");
 const public_decorator_1 = require("../auth/decorators/public.decorator");
+const chat_gateway_1 = require("./gateways/chat.gateway");
 let ChatsController = class ChatsController {
-    constructor(chatsService, fileStorageService) {
+    constructor(chatsService, fileStorageService, chatGateway) {
         this.chatsService = chatsService;
         this.fileStorageService = fileStorageService;
+        this.chatGateway = chatGateway;
     }
     create(createMessageDto, req) {
         return this.chatsService.create(createMessageDto, req.user);
@@ -125,6 +127,38 @@ let ChatsController = class ChatsController {
             return res.status(500).json({ message: 'Error al obtener la miniatura', error: error.message });
         }
     }
+    async deleteMessage(messageId, deleteForEveryone, req) {
+        try {
+            const result = await this.chatsService.deleteMessage(messageId, req.user._id, deleteForEveryone === 'true');
+            if (result) {
+                if (deleteForEveryone === 'true') {
+                    if (result.roomId) {
+                        this.chatGateway.server.to(`room_${result.roomId}`).emit('message_deleted', {
+                            messageId: result._id,
+                            deleteForEveryone: true
+                        });
+                    }
+                    else if (result.recipientId) {
+                        this.chatGateway.server.to(`user_${result.recipientId}`).emit('message_deleted', {
+                            messageId: result._id,
+                            deleteForEveryone: true
+                        });
+                    }
+                }
+            }
+            return {
+                success: true,
+                message: `Mensaje eliminado exitosamente`,
+                deleted: result
+            };
+        }
+        catch (error) {
+            return {
+                success: false,
+                message: error.message || 'Error al eliminar el mensaje'
+            };
+        }
+    }
     markAsRead(id) {
         return this.chatsService.markAsRead(id);
     }
@@ -185,6 +219,15 @@ __decorate([
     __metadata("design:returntype", Promise)
 ], ChatsController.prototype, "getFileThumbnail", null);
 __decorate([
+    (0, common_1.Delete)('message/:messageId'),
+    __param(0, (0, common_1.Param)('messageId')),
+    __param(1, (0, common_1.Query)('deleteForEveryone')),
+    __param(2, (0, common_1.Request)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, String, Object]),
+    __metadata("design:returntype", Promise)
+], ChatsController.prototype, "deleteMessage", null);
+__decorate([
     (0, common_1.Post)(':id/read'),
     __param(0, (0, common_1.Param)('id')),
     __metadata("design:type", Function),
@@ -202,6 +245,7 @@ exports.ChatsController = ChatsController = __decorate([
     (0, common_1.Controller)('chats'),
     (0, common_1.UseGuards)(jwt_auth_guard_1.JwtAuthGuard),
     __metadata("design:paramtypes", [chats_service_1.ChatsService,
-        file_storage_service_1.FileStorageService])
+        file_storage_service_1.FileStorageService,
+        chat_gateway_1.ChatGateway])
 ], ChatsController);
 //# sourceMappingURL=chats.controller.js.map

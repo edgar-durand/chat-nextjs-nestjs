@@ -93,6 +93,10 @@ __decorate([
     __metadata("design:type", Array)
 ], Message.prototype, "deletedFor", void 0);
 __decorate([
+    (0, mongoose_1.Prop)({ default: false }),
+    __metadata("design:type", Boolean)
+], Message.prototype, "deletedForEveryone", void 0);
+__decorate([
     (0, mongoose_1.Prop)({ default: Date.now }),
     __metadata("design:type", Date)
 ], Message.prototype, "createdAt", void 0);

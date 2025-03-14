@@ -6,13 +6,15 @@ import { Message } from './schemas/message.schema';
 import { Response } from 'express';
 import { FileStorageService } from '../file-storage/file-storage.service';
 import { Public } from '../auth/decorators/public.decorator';
+import { ChatGateway } from './gateways/chat.gateway';
 
 @Controller('chats')
 @UseGuards(JwtAuthGuard)
 export class ChatsController {
   constructor(
     private readonly chatsService: ChatsService,
-    private readonly fileStorageService: FileStorageService
+    private readonly fileStorageService: FileStorageService,
+    private readonly chatGateway: ChatGateway
   ) {}
 
   @Post()
@@ -163,6 +165,52 @@ export class ChatsController {
     } catch (error) {
       console.error('Error al obtener miniatura:', error);
       return res.status(500).json({ message: 'Error al obtener la miniatura', error: error.message });
+    }
+  }
+
+  @Delete('message/:messageId')
+  async deleteMessage(
+    @Param('messageId') messageId: string,
+    @Query('deleteForEveryone') deleteForEveryone: string,
+    @Request() req
+  ) {
+    try {
+      const result = await this.chatsService.deleteMessage(
+        messageId, 
+        req.user._id, 
+        deleteForEveryone === 'true'
+      );
+      
+      // Enviar notificación en tiempo real a los usuarios correspondientes
+      if (result) {
+        if (deleteForEveryone === 'true') {
+          // Si se eliminó para todos, emitir a la sala o al usuario correspondiente
+          if (result.roomId) {
+            // Si es un mensaje de sala, enviar a todos los miembros de la sala
+            this.chatGateway.server.to(`room_${result.roomId}`).emit('message_deleted', {
+              messageId: result._id,
+              deleteForEveryone: true
+            });
+          } else if (result.recipientId) {
+            // Si es un mensaje directo, enviar al destinatario
+            this.chatGateway.server.to(`user_${result.recipientId}`).emit('message_deleted', {
+              messageId: result._id,
+              deleteForEveryone: true
+            });
+          }
+        }
+      }
+      
+      return { 
+        success: true, 
+        message: `Mensaje eliminado exitosamente`,
+        deleted: result
+      };
+    } catch (error) {
+      return { 
+        success: false, 
+        message: error.message || 'Error al eliminar el mensaje' 
+      };
     }
   }
 

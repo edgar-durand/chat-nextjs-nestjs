@@ -17,4 +17,5 @@ export declare class ChatsService {
     clearDirectMessageHistory(userId: string, recipientId: string): Promise<{
         deletedCount: number;
     }>;
+    deleteMessage(messageId: string, userId: string, deleteForEveryone: boolean): Promise<any>;
 }

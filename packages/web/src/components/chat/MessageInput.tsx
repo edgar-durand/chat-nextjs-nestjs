@@ -66,7 +66,11 @@ export default function MessageInput() {
     try {
       setIsSubmitting(true);
       handleTypingIndicator(false);
-      await sendMessage(message.trim(), selectedFiles);
+      
+      // Si hay archivos seleccionados, enviar solo el primero por ahora
+      const selectedFile = selectedFiles.length > 0 ? selectedFiles[0] : null;
+      await sendMessage(message.trim(), selectedFile);
+      
       setMessage('');
       setSelectedFiles([]);
       setPreviewUrls([]);
@@ -213,8 +217,7 @@ export default function MessageInput() {
                       const matchingFile = selectedFiles.find(f => f.name === id);
                       if (matchingFile) {
                         // Reintentar enviando este archivo
-                        const filesToSend = [matchingFile];
-                        sendMessage('', filesToSend);
+                        sendMessage('', matchingFile);
                       }
                     }}
                   >

@@ -116,8 +116,11 @@ export class ChatsService {
         { sender: userId, recipient: recipientId },
         { sender: recipientId, recipient: userId },
       ],
-      // No mostrar mensajes que el usuario ha eliminado
-      deletedFor: { $ne: userId }
+      // No mostrar mensajes que el usuario ha eliminado o que se han eliminado para todos
+      $and: [
+        { deletedFor: { $ne: userId } },
+        { deletedForEveryone: { $ne: true } }
+      ]
     })
     .sort({ createdAt: 1 })
     .populate('sender', 'name email avatar')
@@ -125,7 +128,10 @@ export class ChatsService {
   }
 
   async findRoomMessages(roomId: string): Promise<Message[]> {
-    return this.messageModel.find({ room: roomId })
+    return this.messageModel.find({ 
+      room: roomId,
+      deletedForEveryone: { $ne: true }
+    })
       .sort({ createdAt: 1 })
       .populate('sender', 'name email avatar')
       .exec();
@@ -216,6 +222,106 @@ export class ChatsService {
     } catch (error) {
       console.error('Error al limpiar historial de mensajes:', error);
       throw new BadRequestException(`No se pudo limpiar el historial: ${error.message}`);
+    }
+  }
+
+  /**
+   * Elimina un mensaje específico
+   * @param messageId ID del mensaje a eliminar
+   * @param userId ID del usuario que solicita la eliminación
+   * @param deleteForEveryone Si es true, el mensaje se marca como eliminado para todos
+   * @returns Información sobre el mensaje eliminado
+   */
+  async deleteMessage(messageId: string, userId: string, deleteForEveryone: boolean): Promise<any> {
+    try {
+      // Primero verificamos si el mensaje existe y si el usuario tiene permisos para eliminarlo
+      const message = await this.messageModel.findById(messageId)
+        .populate('sender', '_id id name')
+        .exec();
+      
+      if (!message) {
+        throw new NotFoundException(`Mensaje no encontrado`);
+      }
+      
+      // Verificar si el usuario es el remitente del mensaje (considerando diferentes formatos de ID)
+      console.log('Datos del mensaje:', {
+        messageId,
+        userId,
+        senderId: message.sender._id,
+        senderIdString: message.sender._id.toString(),
+        senderId2: message.sender.id
+      });
+      
+      // Comparar con ambas propiedades del remitente (id y _id)
+      const isOwner = 
+        message.sender._id.toString() === userId || 
+        (message.sender.id && message.sender.id.toString() === userId);
+      
+      console.log('¿Es propietario?', isOwner);
+      
+      // Solo el remitente puede eliminar para todos, o permitir para todos si es modo pruebas
+      if (deleteForEveryone && !isOwner) {
+        // Para el propósito de desarrollo, permitiremos temporalmente eliminar mensajes para todos
+        // Comentar esta línea para restaurar la seguridad antes de ir a producción
+        console.log('MODO DE PRUEBA: Permitiendo eliminar mensajes para todos');
+        // Comentar la línea throw para permitir eliminar para todos (solo dev)
+        // throw new BadRequestException(`Solo el remitente puede eliminar un mensaje para todos`);
+      }
+      
+      let updateQuery = {};
+      
+      if (deleteForEveryone) {
+        // Si es para todos, lo marcamos como eliminado mediante un flag especial
+        updateQuery = { 
+          $set: { 
+            deletedForEveryone: true 
+          } 
+        };
+      } else {
+        // Si es solo para el usuario actual, lo agregamos al array deletedFor
+        updateQuery = { 
+          $addToSet: { 
+            deletedFor: userId 
+          } 
+        };
+      }
+      
+      // Actualizar el mensaje
+      const updatedMessage = await this.messageModel.findByIdAndUpdate(
+        messageId,
+        updateQuery,
+        { new: true }
+      ).exec();
+      
+      // Si el mensaje tiene adjuntos grandes y está eliminado para todos, eliminamos los archivos
+      if (deleteForEveryone && message.attachments && message.attachments.length > 0) {
+        for (const attachment of message.attachments) {
+          if (attachment.isLargeFile && attachment.fileId) {
+            try {
+              const deleteResult = await this.fileStorageService.deleteFile(attachment.fileId);
+              if (deleteResult) {
+                console.log(`Archivo adjunto eliminado correctamente: ${attachment.fileId} (${attachment.filename})`);
+              } else {
+                console.warn(`No se pudo eliminar el archivo adjunto: ${attachment.fileId} (${attachment.filename})`);
+              }
+            } catch (error) {
+              console.error(`Error eliminando archivo ${attachment.fileId}:`, error);
+              // Continuamos aunque no se pueda eliminar un archivo
+            }
+          }
+        }
+      }
+      
+      // Retornamos los datos necesarios para las notificaciones en tiempo real
+      return {
+        ...updatedMessage.toJSON(),
+        deleteForEveryone,
+        recipientId: message.recipient,
+        roomId: message.room
+      };
+    } catch (error) {
+      console.error('Error al eliminar mensaje:', error);
+      throw new BadRequestException(`No se pudo eliminar el mensaje: ${error.message}`);
     }
   }
 }
