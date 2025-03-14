@@ -17,12 +17,55 @@ const common_1 = require("@nestjs/common");
 const mongoose_1 = require("@nestjs/mongoose");
 const mongoose_2 = require("mongoose");
 const message_schema_1 = require("./schemas/message.schema");
+const file_storage_service_1 = require("../file-storage/file-storage.service");
 let ChatsService = class ChatsService {
-    constructor(messageModel) {
+    constructor(messageModel, fileStorageService) {
         this.messageModel = messageModel;
+        this.fileStorageService = fileStorageService;
+        this.INLINE_FILE_SIZE_LIMIT = 5 * 1024 * 1024;
+        this.MAX_FILE_SIZE = 50 * 1024 * 1024;
     }
     async create(createMessageDto, sender) {
-        const newMessage = new this.messageModel(Object.assign(Object.assign({ content: createMessageDto.content, sender: sender._id }, (createMessageDto.recipientId && { recipient: createMessageDto.recipientId })), (createMessageDto.roomId && { room: createMessageDto.roomId })));
+        if (!createMessageDto.content && (!createMessageDto.attachments || createMessageDto.attachments.length === 0)) {
+            throw new common_1.BadRequestException('Message must contain either text content or attachments');
+        }
+        let processedAttachments = [];
+        if (createMessageDto.attachments && createMessageDto.attachments.length > 0) {
+            for (const attachment of createMessageDto.attachments) {
+                const base64Size = attachment.data ? Buffer.from(attachment.data, 'base64').length : 0;
+                const fileSize = attachment.size || base64Size;
+                if (fileSize > this.MAX_FILE_SIZE) {
+                    throw new common_1.BadRequestException(`File ${attachment.filename} exceeds the ${this.MAX_FILE_SIZE / (1024 * 1024)}MB size limit`);
+                }
+                if (fileSize <= this.INLINE_FILE_SIZE_LIMIT) {
+                    processedAttachments.push(attachment);
+                    continue;
+                }
+                if (fileSize > this.INLINE_FILE_SIZE_LIMIT) {
+                    try {
+                        const fileBuffer = Buffer.from(attachment.data, 'base64');
+                        const fileId = await this.fileStorageService.uploadCompleteFile(fileBuffer, {
+                            originalFilename: attachment.filename,
+                            contentType: attachment.contentType,
+                            size: fileSize
+                        });
+                        processedAttachments.push({
+                            filename: attachment.filename,
+                            contentType: attachment.contentType,
+                            fileType: attachment.fileType,
+                            size: fileSize,
+                            fileId: fileId,
+                            isLargeFile: true,
+                        });
+                    }
+                    catch (error) {
+                        console.error('Error uploading large file:', error);
+                        throw new common_1.BadRequestException(`Failed to upload file: ${error.message}`);
+                    }
+                }
+            }
+        }
+        const newMessage = new this.messageModel(Object.assign(Object.assign({ content: createMessageDto.content, attachments: processedAttachments, sender: sender._id, deletedFor: [] }, (createMessageDto.recipientId && { recipient: createMessageDto.recipientId })), (createMessageDto.roomId && { room: createMessageDto.roomId })));
         return newMessage.save();
     }
     async findDirectMessages(userId, recipientId) {
@@ -31,6 +74,7 @@ let ChatsService = class ChatsService {
                 { sender: userId, recipient: recipientId },
                 { sender: recipientId, recipient: userId },
             ],
+            deletedFor: { $ne: userId }
         })
             .sort({ createdAt: 1 })
             .populate('sender', 'name email avatar')
@@ -55,11 +99,59 @@ let ChatsService = class ChatsService {
             isRead: false,
         }).exec();
     }
+    async clearDirectMessageHistory(userId, recipientId) {
+        try {
+            const result = await this.messageModel.updateMany({
+                $or: [
+                    { sender: userId, recipient: recipientId },
+                    { sender: recipientId, recipient: userId },
+                ],
+                deletedFor: { $ne: userId }
+            }, {
+                $addToSet: { deletedFor: userId }
+            }).exec();
+            const invisibleMessagesWithAttachments = await this.messageModel.find({
+                $or: [
+                    { sender: userId, recipient: recipientId },
+                    { sender: recipientId, recipient: userId },
+                ],
+                'attachments.isLargeFile': true,
+                deletedFor: { $all: [userId, recipientId] }
+            }).exec();
+            for (const message of invisibleMessagesWithAttachments) {
+                if (message.attachments && message.attachments.length > 0) {
+                    for (const attachment of message.attachments) {
+                        if (attachment.isLargeFile && attachment.fileId) {
+                            try {
+                                await this.fileStorageService.deleteFile(attachment.fileId);
+                            }
+                            catch (error) {
+                                console.error(`Error eliminando archivo ${attachment.fileId}:`, error);
+                            }
+                        }
+                    }
+                }
+            }
+            await this.messageModel.deleteMany({
+                $or: [
+                    { sender: userId, recipient: recipientId },
+                    { sender: recipientId, recipient: userId },
+                ],
+                deletedFor: { $all: [userId, recipientId] }
+            }).exec();
+            return { deletedCount: result.modifiedCount };
+        }
+        catch (error) {
+            console.error('Error al limpiar historial de mensajes:', error);
+            throw new common_1.BadRequestException(`No se pudo limpiar el historial: ${error.message}`);
+        }
+    }
 };
 exports.ChatsService = ChatsService;
 exports.ChatsService = ChatsService = __decorate([
     (0, common_1.Injectable)(),
     __param(0, (0, mongoose_1.InjectModel)(message_schema_1.Message.name)),
-    __metadata("design:paramtypes", [mongoose_2.Model])
+    __metadata("design:paramtypes", [mongoose_2.Model,
+        file_storage_service_1.FileStorageService])
 ], ChatsService);
 //# sourceMappingURL=chats.service.js.map

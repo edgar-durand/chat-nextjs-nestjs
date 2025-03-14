@@ -8,8 +8,8 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   const configService = app.get(ConfigService);
   
-  // Aumentar el límite de tamaño para permitir subir imágenes
-  app.use(json({ limit: '10mb' }));
+  // Increase size limit to allow file uploads (10MB)
+  app.use(json({ limit: '25mb' }));
   
   app.enableCors({
     origin: configService.get('CORS_ORIGIN') || 'http://localhost:3000',

@@ -21,11 +21,15 @@ const create_message_dto_1 = require("../dto/create-message.dto");
 const auth_service_1 = require("../../auth/auth.service");
 const users_service_1 = require("../../users/users.service");
 const ws_jwt_auth_guard_1 = require("../../auth/guards/ws-jwt-auth.guard");
+const mongoose_1 = require("@nestjs/mongoose");
+const mongoose_2 = require("mongoose");
+const room_schema_1 = require("../../rooms/schemas/room.schema");
 let ChatGateway = class ChatGateway {
-    constructor(chatsService, authService, usersService) {
+    constructor(chatsService, authService, usersService, roomModel) {
         this.chatsService = chatsService;
         this.authService = authService;
         this.usersService = usersService;
+        this.roomModel = roomModel;
         this.userSocketMap = new Map();
     }
     async handleConnection(client) {
@@ -98,41 +102,48 @@ let ChatGateway = class ChatGateway {
                     name: user.name,
                     email: user.email,
                     avatar: user.avatar,
-                } });
+                }, deletedFor: message.deletedFor || [] });
             if (createMessageDto.roomId) {
                 this.server.to(`room_${createMessageDto.roomId}`).emit('new_message', populatedMessage);
                 const users = await this.usersService.findAll();
-                for (const potentialMember of users) {
-                    if (potentialMember._id.toString() === user._id.toString())
-                        continue;
-                    const isMember = await this.usersService.isRoomMember(potentialMember._id, createMessageDto.roomId);
-                    if (isMember) {
-                        await this.usersService.incrementUnreadMessage(potentialMember._id.toString(), `room_${createMessageDto.roomId}`);
-                        const socketId = this.userSocketMap.get(potentialMember._id.toString());
-                        if (socketId) {
-                            const unreadCounts = await this.usersService.getUnreadMessages(potentialMember._id.toString());
-                            this.server.to(socketId).emit('unread_messages_count', unreadCounts);
+                const room = await this.roomModel.findById(createMessageDto.roomId).exec();
+                if (room) {
+                    for (const memberId of room.members) {
+                        if (memberId.toString() !== user._id.toString()) {
+                            await this.usersService.incrementUnreadMessage(memberId.toString(), `room_${createMessageDto.roomId}`);
+                            const onlineUser = users.find(u => u._id.toString() === memberId.toString() && u.isOnline);
+                            if (onlineUser) {
+                                const socketId = this.userSocketMap.get(memberId.toString());
+                                if (socketId) {
+                                    const unreadCounts = await this.usersService.getUnreadMessages(memberId.toString());
+                                    this.server.to(socketId).emit('unread_messages_count', unreadCounts);
+                                }
+                            }
                         }
                     }
                 }
             }
             else if (createMessageDto.recipientId) {
-                await this.usersService.incrementUnreadMessage(createMessageDto.recipientId, `user_${user._id}`);
                 const recipientSocketId = this.userSocketMap.get(createMessageDto.recipientId);
+                client.emit('new_message', populatedMessage);
+                if (recipientSocketId) {
+                    console.log(`Enviando mensaje al destinatario con socket ID: ${recipientSocketId}`);
+                    this.server.to(recipientSocketId).emit('new_message', populatedMessage);
+                }
+                await this.usersService.incrementUnreadMessage(createMessageDto.recipientId, `user_${user._id}`);
                 if (recipientSocketId) {
                     const unreadCounts = await this.usersService.getUnreadMessages(createMessageDto.recipientId);
                     this.server.to(recipientSocketId).emit('unread_messages_count', unreadCounts);
                 }
-                this.server.to(`user_${createMessageDto.recipientId}`).emit('new_message', populatedMessage);
-                if (user._id.toString() !== createMessageDto.recipientId) {
-                    this.server.to(`user_${user._id}`).emit('new_message', populatedMessage);
-                }
             }
-            return { success: true, message: populatedMessage };
+            return { success: true, messageId: message._id };
         }
         catch (error) {
-            console.error('Error sending message:', error);
-            return { success: false, error: error.message };
+            console.error('Error handling message:', error);
+            return {
+                success: false,
+                error: error.message || 'Error al procesar el mensaje'
+            };
         }
     }
     async handleTyping(client, data) {
@@ -281,9 +292,12 @@ exports.ChatGateway = ChatGateway = __decorate([
             origin: process.env.CORS_ORIGIN || 'http://localhost:3000',
             credentials: true,
         },
+        maxHttpBufferSize: 25 * 1024 * 1024,
     }),
+    __param(3, (0, mongoose_1.InjectModel)(room_schema_1.Room.name)),
     __metadata("design:paramtypes", [chats_service_1.ChatsService,
         auth_service_1.AuthService,
-        users_service_1.UsersService])
+        users_service_1.UsersService,
+        mongoose_2.Model])
 ], ChatGateway);
 //# sourceMappingURL=chat.gateway.js.map

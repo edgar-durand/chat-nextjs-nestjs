@@ -8,7 +8,7 @@ const express_1 = require("express");
 async function bootstrap() {
     const app = await core_1.NestFactory.create(app_module_1.AppModule);
     const configService = app.get(config_1.ConfigService);
-    app.use((0, express_1.json)({ limit: '10mb' }));
+    app.use((0, express_1.json)({ limit: '25mb' }));
     app.enableCors({
         origin: configService.get('CORS_ORIGIN') || 'http://localhost:3000',
         credentials: true,

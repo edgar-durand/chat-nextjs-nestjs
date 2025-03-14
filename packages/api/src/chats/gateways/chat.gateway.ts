@@ -14,12 +14,16 @@ import { CreateMessageDto } from '../dto/create-message.dto';
 import { AuthService } from '../../auth/auth.service';
 import { UsersService } from '../../users/users.service';
 import { WsJwtAuthGuard } from '../../auth/guards/ws-jwt-auth.guard';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model } from 'mongoose';
+import { Room } from '../../rooms/schemas/room.schema';
 
 @WebSocketGateway({
   cors: {
     origin: process.env.CORS_ORIGIN || 'http://localhost:3000',
     credentials: true,
   },
+  maxHttpBufferSize: 25 * 1024 * 1024, // 25MB
 })
 export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer()
@@ -31,6 +35,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     private readonly chatsService: ChatsService,
     private readonly authService: AuthService,
     private readonly usersService: UsersService,
+    @InjectModel(Room.name) private readonly roomModel: Model<Room>,
   ) {}
 
   async handleConnection(client: Socket) {
@@ -64,7 +69,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
         isOnline: true,
       });
       
-      // Enviar recuento de mensajes no leídos al usuario cuando se conecta
+      // Send unread messages count to user when they connect
       const unreadCounts = await this.usersService.getUnreadMessages(user._id.toString());
       client.emit('unread_messages_count', unreadCounts);
       
@@ -148,70 +153,76 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
           email: user.email,
           avatar: user.avatar,
         },
+        // Aseguramos que el campo deletedFor se envía correctamente
+        deletedFor: message.deletedFor || [],
       };
 
       // If it's a room message
       if (createMessageDto.roomId) {
-        // Emitir a todos los miembros de la sala (están ya suscritos al canal room_X)
+        // Emit to all room members (already subscribed to the room_X channel)
         this.server.to(`room_${createMessageDto.roomId}`).emit('new_message', populatedMessage);
         
-        // Obtener TODOS los usuarios conectados (sus IDs y sockets)
+        // Get ALL connected users (their IDs and sockets)
         const users = await this.usersService.findAll();
         
-        // Para cada usuario, verificar si es miembro de la sala pero no es el remitente
-        for (const potentialMember of users) {
-          // No enviar notificación al remitente
-          if (potentialMember._id.toString() === user._id.toString()) continue;
-          
-          // Verificar si el usuario es miembro de esta sala específica
-          const isMember = await this.usersService.isRoomMember(
-            potentialMember._id, 
-            createMessageDto.roomId
-          );
-          
-          if (isMember) {
-            // Incrementar contador de mensajes no leídos en la base de datos
-            await this.usersService.incrementUnreadMessage(
-              potentialMember._id.toString(),
-              `room_${createMessageDto.roomId}`
-            );
-            
-            // Si el usuario está conectado, enviarle actualización inmediata
-            const socketId = this.userSocketMap.get(potentialMember._id.toString());
-            if (socketId) {
-              const unreadCounts = await this.usersService.getUnreadMessages(potentialMember._id.toString());
-              this.server.to(socketId).emit('unread_messages_count', unreadCounts);
+        // Obtener directamente la sala desde el modelo
+        const room = await this.roomModel.findById(createMessageDto.roomId).exec();
+        
+        if (room) {
+          // Increase unread count for all room members who are NOT the sender
+          for (const memberId of room.members) {
+            if (memberId.toString() !== user._id.toString()) {
+              await this.usersService.incrementUnreadMessage(memberId.toString(), `room_${createMessageDto.roomId}`);
+              
+              // Find if this user is online
+              const onlineUser = users.find(u => u._id.toString() === memberId.toString() && u.isOnline);
+              
+              if (onlineUser) {
+                // Get the socket ID for this user
+                const socketId = this.userSocketMap.get(memberId.toString());
+                
+                if (socketId) {
+                  // Send unread count update to this user
+                  const unreadCounts = await this.usersService.getUnreadMessages(memberId.toString());
+                  this.server.to(socketId).emit('unread_messages_count', unreadCounts);
+                }
+              }
             }
           }
         }
-      } 
-      // If it's a direct message
-      else if (createMessageDto.recipientId) {
-        // Incrementar el contador de mensajes no leídos en la base de datos
-        await this.usersService.incrementUnreadMessage(
-          createMessageDto.recipientId,
-          `user_${user._id}`
-        );
-        
-        // Si el receptor está conectado, enviarle actualización en tiempo real
+      } else if (createMessageDto.recipientId) {
+        // It's a direct message
+        // Get the recipient's socket ID
         const recipientSocketId = this.userSocketMap.get(createMessageDto.recipientId);
+        
+        // Emit to sender (acknowledge their message)
+        client.emit('new_message', populatedMessage);
+        
+        // Emit to recipient if they are connected
+        if (recipientSocketId) {
+          console.log(`Enviando mensaje al destinatario con socket ID: ${recipientSocketId}`);
+          this.server.to(recipientSocketId).emit('new_message', populatedMessage);
+        }
+        
+        // Incrementar contador de mensajes no leídos para el destinatario
+        await this.usersService.incrementUnreadMessage(createMessageDto.recipientId, `user_${user._id}`);
+        
+        // Si el destinatario está conectado, enviarle actualización de mensajes no leídos
         if (recipientSocketId) {
           const unreadCounts = await this.usersService.getUnreadMessages(createMessageDto.recipientId);
           this.server.to(recipientSocketId).emit('unread_messages_count', unreadCounts);
         }
-        
-        // Send to recipient
-        this.server.to(`user_${createMessageDto.recipientId}`).emit('new_message', populatedMessage);
-        // Send to sender (if they're not the same)
-        if (user._id.toString() !== createMessageDto.recipientId) {
-          this.server.to(`user_${user._id}`).emit('new_message', populatedMessage);
-        }
       }
-
-      return { success: true, message: populatedMessage };
+      
+      // Enviar respuesta de éxito al cliente
+      return { success: true, messageId: message._id };
     } catch (error) {
-      console.error('Error sending message:', error);
-      return { success: false, error: error.message };
+      console.error('Error handling message:', error);
+      // Enviar respuesta de error al cliente
+      return { 
+        success: false, 
+        error: error.message || 'Error al procesar el mensaje' 
+      };
     }
   }
 
@@ -286,7 +297,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
         return { success: false, error: 'Unauthorized' };
       }
       
-      // Obtener mensajes no leídos desde la base de datos
+      // Get unread messages from database
       const unreadCounts = await this.usersService.getUnreadMessages(user._id.toString());
       client.emit('unread_messages_count', unreadCounts);
       return { success: true, unreadCounts };
@@ -310,15 +321,15 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
         return { success: false, error: 'Unauthorized' };
       }
       
-      // Construir la clave del chat
+      // Build the chat key
       const chatKey = data.chatType === 'private' 
         ? `user_${data.chatId}` 
         : `room_${data.chatId}`;
       
-      // Marcar mensajes como leídos en la base de datos
+      // Mark messages as read in database
       await this.usersService.markMessagesAsRead(user._id.toString(), chatKey);
       
-      // Enviar actualización al cliente
+      // Send update to client
       const unreadCounts = await this.usersService.getUnreadMessages(user._id.toString());
       client.emit('unread_messages_count', unreadCounts);
       

@@ -12,9 +12,32 @@ interface User {
   isOnline?: boolean;
 }
 
+export enum FileType {
+  IMAGE = 'image',
+  VIDEO = 'video',
+  DOCUMENT = 'document',
+  AUDIO = 'audio'
+}
+
+export interface FileAttachment {
+  filename: string;
+  contentType: string;
+  fileType: FileType;
+  data?: string; // Base64 encoded data para archivos pequeños
+  size?: number;
+  fileId?: string; // ID para archivos grandes almacenados por separado
+  isLargeFile?: boolean; // Indica si el archivo está almacenado por separado
+  isChunk?: boolean;
+  originalFilename?: string;
+  chunkIndex?: number;
+  totalChunks?: number;
+  tempId?: string; // ID temporal para seguimiento de carga
+}
+
 interface Message {
   _id: string;
-  content: string;
+  content?: string;
+  attachments?: FileAttachment[];
   sender: User;
   recipient?: string;
   room?: string;
@@ -40,16 +63,18 @@ interface ChatContextType {
   rooms: Room[];
   onlineUsers: Record<string, boolean>;
   users: User[];
-  typingUsers: Record<string, boolean>;
+  typingUsers: Record<string, boolean | string>;
   isLoading: boolean;
   unreadMessages: Record<string, number>;
+  uploadingFiles: { [key: string]: { progress: number, error?: string } };
   setActiveChat: (chat: { type: 'private' | 'room', id: string } | null) => void;
-  sendMessage: (content: string) => Promise<void>;
+  sendMessage: (content: string, attachments?: FileAttachment[]) => Promise<void>;
   createRoom: (name: string, description?: string, isPrivate?: boolean, members?: string[]) => Promise<Room>;
   updateRoom: (roomId: string, data: { name?: string; description?: string; image?: string; isPrivate?: boolean }) => Promise<Room>;
   joinRoom: (roomId: string, userId?: string) => Promise<void>;
   leaveRoom: (roomId: string, userId?: string) => Promise<void>;
   setTyping: (isTyping: boolean) => void;
+  clearChatHistory: (recipientId: string) => Promise<{ success: boolean, message: string }>;
 }
 
 const ChatContext = createContext<ChatContextType>({
@@ -61,6 +86,7 @@ const ChatContext = createContext<ChatContextType>({
   typingUsers: {},
   isLoading: true,
   unreadMessages: {},
+  uploadingFiles: {},
   setActiveChat: () => {},
   sendMessage: async () => {},
   createRoom: async () => ({ 
@@ -82,6 +108,7 @@ const ChatContext = createContext<ChatContextType>({
   joinRoom: async () => {},
   leaveRoom: async () => {},
   setTyping: () => {},
+  clearChatHistory: async () => ({ success: false, message: 'Not implemented' }),
 });
 
 export const useChat = () => useContext(ChatContext);
@@ -93,13 +120,16 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [rooms, setRooms] = useState<Room[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [onlineUsers, setOnlineUsers] = useState<Record<string, boolean>>({});
-  const [typingUsers, setTypingUsers] = useState<Record<string, boolean>>({});
+  const [typingUsers, setTypingUsers] = useState<Record<string, boolean | string>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [socketConnected, setSocketConnected] = useState(false);
   const [unreadMessages, setUnreadMessages] = useState<Record<string, number>>({});
+  const [uploadingFiles, setUploadingFiles] = useState<{ [key: string]: { progress: number, error?: string } }>({});
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
   
   const socketRef = useRef<Socket | null>(null);
   const currentActiveChatRef = useRef(activeChat);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   
   // Keep the ref in sync with the state
   useEffect(() => {
@@ -126,6 +156,8 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
     socketRef.current = io(API_URL, {
       auth: { token },
       withCredentials: true,
+      // Aumentar el tiempo de espera para permitir envío de archivos grandes
+      timeout: 60000 // aumentar el tiempo de espera a 60 segundos
     });
     
     // Socket event listeners
@@ -176,7 +208,11 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
         (activeChat?.type === 'private' && data.senderId === activeChat.id) ||
         (activeChat?.type === 'room' && data.roomId === activeChat.id)
       ) {
-        setTypingUsers(prev => ({ ...prev, [data.userId]: data.isTyping }));
+        // Almacenar nombre en lugar de solo la bandera booleana
+        setTypingUsers(prev => ({ 
+          ...prev, 
+          [data.userId]: data.isTyping ? data.userName : false 
+        }));
       }
     });
     
@@ -373,19 +409,108 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
   }, [activeChat, user, isAuthenticated, API_URL]);
   
-  const sendMessage = async (content: string) => {
-    if (!activeChat || !user || !socketRef.current) return;
+  const sendMessage = async (content: string, attachments: FileAttachment[] = []) => {
+    if (!activeChat || !isAuthenticated || !socketRef.current) {
+      return;
+    }
+
+    // Inicializar estado de carga para cada archivo
+    const newUploadingFiles = { ...uploadingFiles };
     
+    // Para archivos grandes, especialmente videos, los enviamos directamente sin fragmentar
+    let processedAttachments: FileAttachment[] = [];
+
+    // Asignar IDs temporales para seguimiento
+    const attachmentsWithIds = attachments.map(attachment => ({
+      ...attachment,
+      tempId: `temp-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`
+    }));
+
+    // Establecer el estado inicial de carga para cada archivo
+    attachmentsWithIds.forEach(attachment => {
+      newUploadingFiles[attachment.tempId] = { progress: 0 };
+    });
+    setUploadingFiles(newUploadingFiles);
+
     try {
+      for (const attachment of attachmentsWithIds) {
+        // Actualizar progreso
+        setUploadingFiles(prev => ({
+          ...prev,
+          [attachment.tempId]: { progress: 10, error: undefined }
+        }));
+
+        // Si es un video o archivo grande, lo enviamos como un único archivo
+        if (attachment.fileType === FileType.VIDEO || 
+            (attachment.size && attachment.size > 5 * 1024 * 1024)) {
+          processedAttachments.push({
+            ...attachment,
+            // Agregamos una bandera para indicar que debe ser almacenado como archivo grande
+            isLargeFile: true
+          });
+
+          // Actualizar progreso
+          setUploadingFiles(prev => ({
+            ...prev,
+            [attachment.tempId]: { progress: 50, error: undefined }
+          }));
+        } else {
+          // Para otros archivos pequeños, los enviamos tal como están
+          processedAttachments.push(attachment);
+        }
+      }
+
       const messageData = {
         content,
+        attachments: processedAttachments,
         ...(activeChat.type === 'private' ? { recipientId: activeChat.id } : { roomId: activeChat.id }),
       };
+
+      // Actualizar progreso para todos los archivos
+      const updatedProgress = { ...uploadingFiles };
+      attachmentsWithIds.forEach(attachment => {
+        updatedProgress[attachment.tempId] = { progress: 75, error: undefined };
+      });
+      setUploadingFiles(updatedProgress);
+
+      // Enviar el mensaje a través del socket
+      socketRef.current.emit('send_message', messageData, (response: any) => {
+        if (response.success) {
+          // Éxito - quitar archivos del estado de carga
+          const finalProgress = { ...uploadingFiles };
+          attachmentsWithIds.forEach(attachment => {
+            delete finalProgress[attachment.tempId];
+          });
+          setUploadingFiles(finalProgress);
+        } else {
+          // Error - actualizar estado con el error
+          const errorProgress = { ...uploadingFiles };
+          attachmentsWithIds.forEach(attachment => {
+            errorProgress[attachment.tempId] = { 
+              progress: 0, 
+              error: response.error || 'Error al enviar el mensaje' 
+            };
+          });
+          setUploadingFiles(errorProgress);
+        }
+      });
       
-      socketRef.current.emit('send_message', messageData);
-    } catch (error) {
-      console.error('Error sending message:', error);
-      throw error;
+      // Limpiar formulario después de enviar
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+      setSelectedFile(null);
+    } catch (error: any) {
+      console.error('Error al procesar archivos:', error);
+      // Actualizar estado con el error
+      const errorProgress = { ...uploadingFiles };
+      attachmentsWithIds.forEach(attachment => {
+        errorProgress[attachment.tempId] = { 
+          progress: 0, 
+          error: error.message || 'Error al procesar archivos' 
+        };
+      });
+      setUploadingFiles(errorProgress);
     }
   };
   
@@ -465,6 +590,16 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
     socketRef.current.emit('typing', typingData);
   };
   
+  const clearChatHistory = async (recipientId: string) => {
+    try {
+      const response = await axios.delete(`${API_URL}/chats/direct/${recipientId}`);
+      return { success: true, message: 'Chat history cleared successfully' };
+    } catch (error) {
+      console.error('Error clearing chat history:', error);
+      return { success: false, message: 'Failed to clear chat history' };
+    }
+  };
+  
   return (
     <ChatContext.Provider value={{
       activeChat,
@@ -475,6 +610,7 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
       typingUsers,
       isLoading,
       unreadMessages,
+      uploadingFiles,
       setActiveChat: handleActiveChatChange,
       sendMessage,
       createRoom,
@@ -482,6 +618,7 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
       joinRoom,
       leaveRoom,
       setTyping,
+      clearChatHistory,
     }}>
       {children}
     </ChatContext.Provider>

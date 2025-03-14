@@ -141,3 +141,93 @@ chat/
 │   └── web/          # NextJS frontend
 ├── turbo.json        # Turborepo configuration
 └── package.json      # Root package.json
+
+```
+
+## Performance Testing
+
+The application includes tools to measure performance and determine how many concurrent users it can handle without degrading performance.
+
+### Prerequisites
+
+1. Install k6 for load testing:
+   ```bash
+   # macOS
+   brew install k6
+   
+   # Linux
+   sudo apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C5AD17C747E3415A3642D57D77C6C491D6AC1D69
+   echo "deb https://dl.k6.io/deb stable main" | sudo tee /etc/apt/sources.list.d/k6.list
+   sudo apt-get update
+   sudo apt-get install k6
+   ```
+
+2. Install dependencies for test scripts:
+   ```bash
+   cd packages/api
+   npm install @faker-js/faker axios --save-dev
+   ```
+
+### Running Performance Tests
+
+1. **Generate Test Users**
+   
+   First, create test users and rooms for the load tests:
+   ```bash
+   cd packages/api
+   node tests/user-generator.js
+   ```
+   This creates 100 test users and 10 chat rooms in your database.
+
+2. **Run REST API Load Test**
+   
+   Test the REST API endpoints performance:
+   ```bash
+   cd packages/api
+   k6 run tests/load-test-rest.js
+   ```
+   This test gradually scales from 0 to 200 concurrent users accessing API endpoints.
+
+3. **Run WebSocket Load Test**
+   
+   Test real-time messaging performance:
+   ```bash
+   cd packages/api
+   node tests/load-test-socketio.js
+   ```
+   This test evaluates how the system performs with 100 concurrent Socket.io connections, each sending multiple messages.
+
+### Analyzing Results
+
+Key metrics to monitor:
+- **Connection Time**: How quickly clients can establish Socket.io connections
+- **Message Latency**: Time taken for messages to be processed
+- **Connection Success Rate**: Percentage of successful connections
+- **Message Delivery Rate**: Percentage of messages successfully delivered
+- **Server Resources**: Watch CPU and memory usage during peak loads
+
+Detailed information about the performance tests can be found in `packages/api/tests/README.md`.
+
+## Running Tests
+
+### Unit Tests
+
+```bash
+# Backend tests
+cd packages/api
+npm run test
+
+# Frontend tests
+cd packages/web
+npm run test
+```
+
+## Project Structure
+
+```
+chat/
+├── packages/
+│   ├── api/          # NestJS backend
+│   └── web/          # NextJS frontend
+├── turbo.json        # Turborepo configuration
+└── package.json      # Root package.json

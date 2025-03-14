@@ -4,13 +4,16 @@ import { ChatsService } from '../chats.service';
 import { CreateMessageDto } from '../dto/create-message.dto';
 import { AuthService } from '../../auth/auth.service';
 import { UsersService } from '../../users/users.service';
+import { Model } from 'mongoose';
+import { Room } from '../../rooms/schemas/room.schema';
 export declare class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     private readonly chatsService;
     private readonly authService;
     private readonly usersService;
+    private readonly roomModel;
     server: Server;
     private userSocketMap;
-    constructor(chatsService: ChatsService, authService: AuthService, usersService: UsersService);
+    constructor(chatsService: ChatsService, authService: AuthService, usersService: UsersService, roomModel: Model<Room>);
     handleConnection(client: Socket): Promise<void>;
     handleDisconnect(client: Socket): Promise<void>;
     handleJoinRoom(client: Socket, data: {
@@ -25,19 +28,12 @@ export declare class ChatGateway implements OnGatewayConnection, OnGatewayDiscon
     };
     handleMessage(client: Socket, createMessageDto: CreateMessageDto): Promise<{
         success: boolean;
-        message: {
-            sender: {
-                _id: any;
-                name: string;
-                email: string;
-                avatar: string;
-            };
-        };
+        messageId: any;
         error?: undefined;
     } | {
         success: boolean;
         error: any;
-        message?: undefined;
+        messageId?: undefined;
     }>;
     handleTyping(client: Socket, data: {
         recipientId?: string;
