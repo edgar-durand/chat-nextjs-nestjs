@@ -4,7 +4,8 @@ import axios from 'axios';
 import { useAuth } from './AuthContext';
 
 interface User {
-  _id: string;
+  id: string;
+  _id?: string;
   name: string;
   email: string;
   avatar: string;
@@ -30,6 +31,7 @@ interface Room {
   members: User[];
   isPrivate: boolean;
   createdAt: string;
+  removed?: boolean;
 }
 
 interface ChatContextType {
@@ -43,8 +45,9 @@ interface ChatContextType {
   setActiveChat: (chat: { type: 'private' | 'room', id: string } | null) => void;
   sendMessage: (content: string) => Promise<void>;
   createRoom: (name: string, description?: string, isPrivate?: boolean, members?: string[]) => Promise<Room>;
-  joinRoom: (roomId: string) => Promise<void>;
-  leaveRoom: (roomId: string) => Promise<void>;
+  updateRoom: (roomId: string, data: { name?: string; description?: string; image?: string; isPrivate?: boolean }) => Promise<Room>;
+  joinRoom: (roomId: string, userId?: string) => Promise<void>;
+  leaveRoom: (roomId: string, userId?: string) => Promise<void>;
   setTyping: (isTyping: boolean) => void;
 }
 
@@ -58,7 +61,22 @@ const ChatContext = createContext<ChatContextType>({
   isLoading: true,
   setActiveChat: () => {},
   sendMessage: async () => {},
-  createRoom: async () => ({ _id: '', name: '', creator: { _id: '', name: '', email: '', avatar: '' }, members: [], isPrivate: false, createdAt: '' }),
+  createRoom: async () => ({ 
+    _id: '', 
+    name: '', 
+    creator: { id: '', _id: '', name: '', email: '', avatar: '' }, 
+    members: [], 
+    isPrivate: false, 
+    createdAt: '' 
+  }),
+  updateRoom: async () => ({ 
+    _id: '', 
+    name: '', 
+    creator: { id: '', _id: '', name: '', email: '', avatar: '' }, 
+    members: [], 
+    isPrivate: false, 
+    createdAt: '' 
+  }),
   joinRoom: async () => {},
   leaveRoom: async () => {},
   setTyping: () => {},
@@ -75,8 +93,15 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [onlineUsers, setOnlineUsers] = useState<Record<string, boolean>>({});
   const [typingUsers, setTypingUsers] = useState<Record<string, boolean>>({});
   const [isLoading, setIsLoading] = useState(true);
+  const [socketConnected, setSocketConnected] = useState(false);
   
   const socketRef = useRef<Socket | null>(null);
+  const currentActiveChatRef = useRef(activeChat);
+  
+  // Keep the ref in sync with the state
+  useEffect(() => {
+    currentActiveChatRef.current = activeChat;
+  }, [activeChat]);
   
   const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
   
@@ -87,6 +112,7 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
         socketRef.current.disconnect();
         socketRef.current = null;
       }
+      setSocketConnected(false);
       return;
     }
     
@@ -102,9 +128,11 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
     // Socket event listeners
     socketRef.current.on('connect', () => {
       console.log('Socket connected');
+      setSocketConnected(true);
     });
     
     socketRef.current.on('new_message', (message: Message) => {
+      const activeChat = currentActiveChatRef.current;
       // Only add the message if it's relevant to the active chat
       if (
         (activeChat?.type === 'private' && 
@@ -121,6 +149,7 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
     });
     
     socketRef.current.on('typing_indicator', (data: { userId: string, userName: string, isTyping: boolean, roomId?: string, senderId?: string }) => {
+      const activeChat = currentActiveChatRef.current;
       if (
         (activeChat?.type === 'private' && data.senderId === activeChat.id) ||
         (activeChat?.type === 'room' && data.roomId === activeChat.id)
@@ -137,16 +166,48 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
       );
     });
     
+    // Handle new room creations
+    socketRef.current.on('new_room', (room: Room) => {
+      console.log('New room received:', room);
+      setRooms(prev => {
+        // Check if the room already exists
+        const exists = prev.some(r => r._id === room._id);
+        if (exists) return prev;
+        return [...prev, room];
+      });
+    });
+    
+    // Handle room updates (members added/removed)
+    socketRef.current.on('room_updated', (room: Room) => {
+      console.log('Room updated:', room);
+      if (room.removed) {
+        // If this room was removed for this user, remove it from the list
+        setRooms(prev => prev.filter(r => r._id !== room._id));
+        
+        // If active chat is this room, clear it
+        const activeChat = currentActiveChatRef.current;
+        if (activeChat?.type === 'room' && activeChat.id === room._id) {
+          setActiveChat(null);
+        }
+      } else {
+        // Update the room in the list
+        setRooms(prev => prev.map(r => r._id === room._id ? room : r));
+      }
+    });
+    
     socketRef.current.on('disconnect', () => {
       console.log('Socket disconnected');
+      setSocketConnected(false);
     });
     
     return () => {
       if (socketRef.current) {
         socketRef.current.disconnect();
+        socketRef.current = null;
       }
+      setSocketConnected(false);
     };
-  }, [isAuthenticated, user, API_URL, activeChat]);
+  }, [isAuthenticated, user, API_URL]);
   
   // Load initial data: users and rooms
   useEffect(() => {
@@ -168,9 +229,9 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setRooms(roomsResponse.data);
         
         // Set initial online status
-        const initialOnlineStatus = {};
-        usersResponse.data.forEach(user => {
-          initialOnlineStatus[user._id] = user.isOnline || false;
+        const initialOnlineStatus: Record<string, boolean> = {};
+        usersResponse.data.forEach((user: User) => {
+          initialOnlineStatus[user._id!] = user.isOnline || false;
         });
         setOnlineUsers(initialOnlineStatus);
         
@@ -186,7 +247,7 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
   
   // Load messages when activeChat changes
   useEffect(() => {
-    if (!activeChat || !isAuthenticated) {
+    if (!activeChat || !isAuthenticated || !socketConnected) {
       setMessages([]);
       return;
     }
@@ -229,7 +290,7 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
         socketRef.current?.emit('leave_room', { roomId: activeChat.id });
       }
     };
-  }, [activeChat, isAuthenticated, API_URL]);
+  }, [activeChat, isAuthenticated, API_URL, socketConnected]);
   
   const sendMessage = async (content: string) => {
     if (!activeChat || !user || !socketRef.current) return;
@@ -256,7 +317,7 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
         members,
       });
       
-      setRooms(prev => [...prev, data]);
+      // No need to manually add to rooms array, the socket event will handle it
       return data;
     } catch (error) {
       console.error('Error creating room:', error);
@@ -264,39 +325,48 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
   
-  const joinRoom = async (roomId: string) => {
-    if (!user) return;
-    
+  const updateRoom = async (roomId: string, updateData: { name?: string; description?: string; image?: string; isPrivate?: boolean }) => {
     try {
-      const { data } = await axios.post(`${API_URL}/rooms/${roomId}/members/${user.id}`);
+      const { data } = await axios.put(`${API_URL}/rooms/${roomId}`, updateData);
       
-      setRooms(prev => 
-        prev.map(room => 
-          room._id === roomId ? data : room
+      // Update the room in the local state to immediately reflect changes
+      setRooms(prevRooms => 
+        prevRooms.map(room => 
+          room._id === roomId ? { ...room, ...data } : room
         )
       );
+      
+      return data;
+    } catch (error) {
+      console.error('Error updating room:', error);
+      throw error;
+    }
+  };
+  
+  const joinRoom = async (roomId: string, userId?: string) => {
+    if (!user && !userId) return;
+    
+    try {
+      // If userId is provided, use it (for admin adding others)
+      // Otherwise use current user's ID (for self-joining)
+      const targetUserId = userId || user!.id;
+      await axios.post(`${API_URL}/rooms/${roomId}/members/${targetUserId}`);
+      // Room update will be handled by socket event
     } catch (error) {
       console.error('Error joining room:', error);
       throw error;
     }
   };
   
-  const leaveRoom = async (roomId: string) => {
-    if (!user) return;
+  const leaveRoom = async (roomId: string, userId?: string) => {
+    if (!user && !userId) return;
     
     try {
-      const { data } = await axios.delete(`${API_URL}/rooms/${roomId}/members/${user.id}`);
-      
-      setRooms(prev => 
-        prev.map(room => 
-          room._id === roomId ? data : room
-        )
-      );
-      
-      // If active chat is this room, clear it
-      if (activeChat?.type === 'room' && activeChat.id === roomId) {
-        setActiveChat(null);
-      }
+      // If userId is provided, use it (for admin removing others)
+      // Otherwise use current user's ID (for self-leaving)
+      const targetUserId = userId || user!.id;
+      await axios.delete(`${API_URL}/rooms/${roomId}/members/${targetUserId}`);
+      // Room update will be handled by socket event
     } catch (error) {
       console.error('Error leaving room:', error);
       throw error;
@@ -326,6 +396,7 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setActiveChat,
       sendMessage,
       createRoom,
+      updateRoom,
       joinRoom,
       leaveRoom,
       setTyping,

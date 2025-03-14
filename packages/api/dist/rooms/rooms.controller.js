@@ -16,6 +16,7 @@ exports.RoomsController = void 0;
 const common_1 = require("@nestjs/common");
 const rooms_service_1 = require("./rooms.service");
 const create_room_dto_1 = require("./dto/create-room.dto");
+const update_room_dto_1 = require("./dto/update-room.dto");
 const jwt_auth_guard_1 = require("../auth/guards/jwt-auth.guard");
 let RoomsController = class RoomsController {
     constructor(roomsService) {
@@ -23,6 +24,9 @@ let RoomsController = class RoomsController {
     }
     create(createRoomDto, req) {
         return this.roomsService.create(createRoomDto, req.user);
+    }
+    update(id, updateRoomDto, req) {
+        return this.roomsService.update(id, updateRoomDto, req.user);
     }
     findAll() {
         return this.roomsService.findAll();
@@ -49,6 +53,15 @@ __decorate([
     __metadata("design:paramtypes", [create_room_dto_1.CreateRoomDto, Object]),
     __metadata("design:returntype", Promise)
 ], RoomsController.prototype, "create", null);
+__decorate([
+    (0, common_1.Put)(':id'),
+    __param(0, (0, common_1.Param)('id')),
+    __param(1, (0, common_1.Body)()),
+    __param(2, (0, common_1.Request)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [String, update_room_dto_1.UpdateRoomDto, Object]),
+    __metadata("design:returntype", Promise)
+], RoomsController.prototype, "update", null);
 __decorate([
     (0, common_1.Get)(),
     __metadata("design:type", Function),

@@ -1,6 +1,7 @@
-import { Controller, Get, Post, Body, Param, UseGuards, Request, Delete } from '@nestjs/common';
+import { Controller, Get, Post, Body, Param, UseGuards, Request, Delete, Put } from '@nestjs/common';
 import { RoomsService } from './rooms.service';
 import { CreateRoomDto } from './dto/create-room.dto';
+import { UpdateRoomDto } from './dto/update-room.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { Room } from './schemas/room.schema';
 
@@ -12,6 +13,15 @@ export class RoomsController {
   @Post()
   create(@Body() createRoomDto: CreateRoomDto, @Request() req): Promise<Room> {
     return this.roomsService.create(createRoomDto, req.user);
+  }
+
+  @Put(':id')
+  update(
+    @Param('id') id: string,
+    @Body() updateRoomDto: UpdateRoomDto,
+    @Request() req,
+  ): Promise<Room> {
+    return this.roomsService.update(id, updateRoomDto, req.user);
   }
 
   @Get()

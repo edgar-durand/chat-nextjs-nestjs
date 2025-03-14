@@ -1,8 +1,10 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { User, UserDocument } from './schemas/user.schema';
+import * as bcrypt from 'bcrypt';
 import { CreateUserDto } from './dto/create-user.dto';
+import { UpdateUserDto } from './dto/update-user.dto';
 
 @Injectable()
 export class UsersService {
@@ -49,6 +51,48 @@ export class UsersService {
     if (!user) {
       throw new NotFoundException(`User with ID ${id} not found`);
     }
+    
+    return user;
+  }
+
+  async updateProfile(userId: string, updateUserDto: UpdateUserDto): Promise<User> {
+    const user = await this.userModel.findById(userId);
+    
+    if (!user) {
+      throw new NotFoundException(`User with ID ${userId} not found`);
+    }
+
+    // Handle password change
+    if (updateUserDto.newPassword) {
+      // Validate current password if provided
+      if (!updateUserDto.currentPassword) {
+        throw new BadRequestException('Current password is required to set a new password');
+      }
+
+      const isPasswordValid = await user.comparePassword(updateUserDto.currentPassword);
+      if (!isPasswordValid) {
+        throw new BadRequestException('Current password is incorrect');
+      }
+
+      // Set new password
+      user.password = updateUserDto.newPassword;
+      
+      // Remove password fields from update object
+      delete updateUserDto.currentPassword;
+      delete updateUserDto.newPassword;
+    }
+
+    // Update other fields
+    if (updateUserDto.name) {
+      user.name = updateUserDto.name;
+    }
+
+    if (updateUserDto.avatar) {
+      user.avatar = updateUserDto.avatar;
+    }
+
+    // Save the updated user
+    await user.save();
     
     return user;
   }

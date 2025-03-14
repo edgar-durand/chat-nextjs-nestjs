@@ -2,10 +2,14 @@ import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { json } from 'express';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   const configService = app.get(ConfigService);
+  
+  // Aumentar el límite de tamaño para permitir subir imágenes
+  app.use(json({ limit: '10mb' }));
   
   app.enableCors({
     origin: configService.get('CORS_ORIGIN') || 'http://localhost:3000',

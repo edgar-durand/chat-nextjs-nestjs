@@ -9,6 +9,13 @@ interface User {
   avatar: string;
 }
 
+interface UpdateProfileData {
+  name?: string;
+  avatar?: string;
+  currentPassword?: string;
+  newPassword?: string;
+}
+
 interface AuthContextType {
   user: User | null;
   isAuthenticated: boolean;
@@ -16,6 +23,7 @@ interface AuthContextType {
   login: (email: string, password: string) => Promise<void>;
   register: (name: string, email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
+  updateProfile: (data: UpdateProfileData) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType>({
@@ -25,6 +33,7 @@ const AuthContext = createContext<AuthContextType>({
   login: async () => {},
   register: async () => {},
   logout: async () => {},
+  updateProfile: async () => {},
 });
 
 export const useAuth = () => useContext(AuthContext);
@@ -56,7 +65,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           email: data.email,
           avatar: data.avatar,
         });
-      } catch (error) {
+      } catch (error: any) {
         localStorage.removeItem('token');
         delete axios.defaults.headers.common['Authorization'];
       } finally {
@@ -76,7 +85,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setUser(data.user);
       
       router.push('/chat');
-    } catch (error) {
+    } catch (error: any) {
       throw new Error(error.response?.data?.message || 'Failed to login');
     }
   };
@@ -90,7 +99,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setUser(data.user);
       
       router.push('/chat');
-    } catch (error) {
+    } catch (error: any) {
       throw new Error(error.response?.data?.message || 'Failed to register');
     }
   };
@@ -98,13 +107,35 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const logout = async () => {
     try {
       await axios.post(`${API_URL}/auth/logout`);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Logout error:', error);
     } finally {
       localStorage.removeItem('token');
       delete axios.defaults.headers.common['Authorization'];
       setUser(null);
       router.push('/login');
+    }
+  };
+
+  const updateProfile = async (data: UpdateProfileData) => {
+    try {
+      const response = await axios.put(`${API_URL}/users/profile`, data);
+      
+      // Update local user state with new data
+      setUser(prevUser => {
+        if (!prevUser) return null;
+        
+        return {
+          ...prevUser,
+          name: response.data.name || prevUser.name,
+          avatar: response.data.avatar || prevUser.avatar,
+        };
+      });
+      
+      return response.data;
+    } catch (error: any) {
+      console.error('Error updating profile:', error);
+      throw new Error(error.response?.data?.message || 'Failed to update profile');
     }
   };
 
@@ -115,7 +146,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       isLoading, 
       login, 
       register, 
-      logout 
+      logout,
+      updateProfile
     }}>
       {children}
     </AuthContext.Provider>

@@ -51,6 +51,32 @@ let UsersService = class UsersService {
         }
         return user;
     }
+    async updateProfile(userId, updateUserDto) {
+        const user = await this.userModel.findById(userId);
+        if (!user) {
+            throw new common_1.NotFoundException(`User with ID ${userId} not found`);
+        }
+        if (updateUserDto.newPassword) {
+            if (!updateUserDto.currentPassword) {
+                throw new common_1.BadRequestException('Current password is required to set a new password');
+            }
+            const isPasswordValid = await user.comparePassword(updateUserDto.currentPassword);
+            if (!isPasswordValid) {
+                throw new common_1.BadRequestException('Current password is incorrect');
+            }
+            user.password = updateUserDto.newPassword;
+            delete updateUserDto.currentPassword;
+            delete updateUserDto.newPassword;
+        }
+        if (updateUserDto.name) {
+            user.name = updateUserDto.name;
+        }
+        if (updateUserDto.avatar) {
+            user.avatar = updateUserDto.avatar;
+        }
+        await user.save();
+        return user;
+    }
 };
 exports.UsersService = UsersService;
 exports.UsersService = UsersService = __decorate([

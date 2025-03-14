@@ -1,13 +1,52 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useChat } from '@/contexts/ChatContext';
 import { useAuth } from '@/contexts/AuthContext';
 import Image from 'next/image';
 import { format } from 'date-fns';
 
+/**
+ * Helper function to get initials from a name
+ * Returns up to 2 initials (first and last name or first two words)
+ */
+const getInitials = (name: string): string => {
+  if (!name) return '';
+  
+  const parts = name.trim().split(/\s+/);
+  if (parts.length >= 2) {
+    // Get first letter of first and last name
+    return `${parts[0].charAt(0)}${parts[1].charAt(0)}`.toUpperCase();
+  } else {
+    // Get first two letters of single name
+    return name.substring(0, Math.min(2, name.length)).toUpperCase();
+  }
+};
+
+/**
+ * Validates if a string is a valid image URL or base64 image data
+ */
+const isValidImageSrc = (src: string | undefined): boolean => {
+  if (!src) return false;
+  
+  // Check if it's a valid URL or base64 data
+  return (
+    src.startsWith('http://') || 
+    src.startsWith('https://') || 
+    src.startsWith('data:image/')
+  );
+};
+
 export default function MessageList() {
   const { user } = useAuth();
   const { messages, isLoading, typingUsers } = useChat();
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [failedImages, setFailedImages] = useState<Record<string, boolean>>({});
+
+  const handleImageError = (id: string) => {
+    setFailedImages(prev => ({
+      ...prev,
+      [id]: true
+    }));
+  };
 
   // Scroll to bottom of messages when messages change
   useEffect(() => {
@@ -69,6 +108,7 @@ export default function MessageList() {
 
           {dateMessages.map((message) => {
             const isOwnMessage = message.sender._id === user?.id;
+            const senderId = message.sender._id || '';
 
             return (
               <div
@@ -79,17 +119,18 @@ export default function MessageList() {
                   {!isOwnMessage && (
                     <div className="flex-shrink-0 mr-3">
                       <div className="h-8 w-8 rounded-full bg-gray-300 flex items-center justify-center overflow-hidden">
-                        {message.sender.avatar ? (
+                        {message.sender.avatar && isValidImageSrc(message.sender.avatar) && !failedImages[senderId] ? (
                           <Image
                             src={message.sender.avatar}
                             alt={message.sender.name}
                             width={32}
                             height={32}
                             className="h-full w-full object-cover"
+                            onError={() => handleImageError(senderId)}
                           />
                         ) : (
                           <span className="text-sm font-medium text-gray-700">
-                            {message.sender.name.charAt(0)}
+                            {getInitials(message.sender.name)}
                           </span>
                         )}
                       </div>
@@ -99,23 +140,21 @@ export default function MessageList() {
                   <div className={`
                     ${isOwnMessage 
                       ? 'bg-primary-500 text-white rounded-tl-lg rounded-tr-none' 
-                      : 'bg-gray-200 text-gray-800 rounded-tr-lg rounded-tl-none'} 
-                    rounded-bl-lg rounded-br-lg px-4 py-2 shadow-sm
+                      : 'bg-gray-200 text-gray-800 rounded-tr-lg rounded-tl-none'
+                    }
+                    rounded-bl-lg rounded-br-lg p-3 shadow-sm
                   `}>
                     {!isOwnMessage && (
-                      <p className="text-xs font-medium mb-1">
+                      <div className="font-medium text-xs mb-1">
                         {message.sender.name}
-                      </p>
+                      </div>
                     )}
-                    <p className="text-sm whitespace-pre-wrap">{message.content}</p>
-                    <p className={`text-xs ${isOwnMessage ? 'text-primary-200' : 'text-gray-500'} text-right mt-1`}>
+                    <div>
+                      {message.content}
+                    </div>
+                    <div className="text-xs mt-1 opacity-80">
                       {format(new Date(message.createdAt), 'h:mm a')}
-                      {isOwnMessage && message.isRead && (
-                        <span className="ml-1">
-                          ✓
-                        </span>
-                      )}
-                    </p>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -124,30 +163,23 @@ export default function MessageList() {
         </div>
       ))}
 
-      {/* Typing indicator */}
+      {/* Show typing indicator */}
       {typingUsersList.length > 0 && (
-        <div className="flex items-center space-x-2 mt-2">
-          <div className="flex-shrink-0">
-            <div className="h-8 w-8 rounded-full bg-gray-300 flex items-center justify-center">
-              <span className="text-sm font-medium text-gray-700">
-                {typingUsersList.length === 1 
-                  ? messages.find(m => m.sender._id === typingUsersList[0])?.sender.name?.charAt(0) || '?'
-                  : '+'
-                }
-              </span>
-            </div>
+        <div className="flex items-center space-x-2 text-gray-500 text-sm">
+          <div className="flex space-x-1">
+            <div className="w-2 h-2 rounded-full bg-gray-400 animate-bounce" style={{ animationDelay: '0ms' }}></div>
+            <div className="w-2 h-2 rounded-full bg-gray-400 animate-bounce" style={{ animationDelay: '200ms' }}></div>
+            <div className="w-2 h-2 rounded-full bg-gray-400 animate-bounce" style={{ animationDelay: '400ms' }}></div>
           </div>
-          <div className="bg-gray-200 rounded-lg px-4 py-2">
-            <div className="flex space-x-1">
-              <div className="h-2 w-2 bg-gray-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
-              <div className="h-2 w-2 bg-gray-500 rounded-full animate-bounce" style={{ animationDelay: '250ms' }}></div>
-              <div className="h-2 w-2 bg-gray-500 rounded-full animate-bounce" style={{ animationDelay: '500ms' }}></div>
-            </div>
-          </div>
+          <span>
+            {typingUsersList.length === 1 
+              ? `${typingUsersList[0]} is typing...` 
+              : `${typingUsersList.length} people are typing...`}
+          </span>
         </div>
       )}
 
-      {/* This div is used for auto-scrolling to the bottom */}
+      {/* Empty div to allow scrolling to bottom of messages */}
       <div ref={messagesEndRef} />
     </div>
   );
