@@ -59,4 +59,23 @@ export declare class ChatGateway implements OnGatewayConnection, OnGatewayDiscon
         success: boolean;
         error: any;
     }>;
+    handleGetUnreadMessages(client: Socket): Promise<{
+        success: boolean;
+        unreadCounts: Record<string, number>;
+        error?: undefined;
+    } | {
+        success: boolean;
+        error: any;
+        unreadCounts?: undefined;
+    }>;
+    handleMarkMessagesRead(client: Socket, data: {
+        chatId: string;
+        chatType: 'private' | 'room';
+    }): Promise<{
+        success: boolean;
+        error?: undefined;
+    } | {
+        success: boolean;
+        error: any;
+    }>;
 }

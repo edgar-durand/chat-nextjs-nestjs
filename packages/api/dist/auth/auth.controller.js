@@ -18,6 +18,7 @@ const auth_service_1 = require("./auth.service");
 const login_dto_1 = require("./dto/login.dto");
 const create_user_dto_1 = require("../users/dto/create-user.dto");
 const jwt_auth_guard_1 = require("./guards/jwt-auth.guard");
+const google_auth_dto_1 = require("./dto/google-auth.dto");
 let AuthController = class AuthController {
     constructor(authService) {
         this.authService = authService;
@@ -27,6 +28,9 @@ let AuthController = class AuthController {
     }
     async register(createUserDto) {
         return this.authService.register(createUserDto);
+    }
+    async googleAuth(googleAuthDto) {
+        return this.authService.googleAuth(googleAuthDto);
     }
     async logout(req) {
         await this.authService.logoutUser(req.user._id);
@@ -51,6 +55,13 @@ __decorate([
     __metadata("design:paramtypes", [create_user_dto_1.CreateUserDto]),
     __metadata("design:returntype", Promise)
 ], AuthController.prototype, "register", null);
+__decorate([
+    (0, common_1.Post)('google-auth'),
+    __param(0, (0, common_1.Body)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [google_auth_dto_1.GoogleAuthDto]),
+    __metadata("design:returntype", Promise)
+], AuthController.prototype, "googleAuth", null);
 __decorate([
     (0, common_1.UseGuards)(jwt_auth_guard_1.JwtAuthGuard),
     (0, common_1.Post)('logout'),

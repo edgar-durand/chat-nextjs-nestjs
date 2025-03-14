@@ -1,14 +1,22 @@
-import '@/styles/globals.css';
+import '../styles/globals.css';
 import type { AppProps } from 'next/app';
-import { AuthProvider } from '@/contexts/AuthContext';
-import { ChatProvider } from '@/contexts/ChatContext';
+import { SessionProvider } from 'next-auth/react';
+import { AuthProvider } from '../contexts/AuthContext';
+import { ChatProvider } from '../contexts/ChatContext';
 
-export default function App({ Component, pageProps }: AppProps) {
+function MyApp({ Component, pageProps }: AppProps) {
   return (
-    <AuthProvider>
-      <ChatProvider>
-        <Component {...pageProps} />
-      </ChatProvider>
-    </AuthProvider>
+    <SessionProvider 
+      session={pageProps.session}
+      refetchInterval={0} // Disable automatic refetching
+    >
+      <AuthProvider>
+        <ChatProvider>
+          <Component {...pageProps} />
+        </ChatProvider>
+      </AuthProvider>
+    </SessionProvider>
   );
 }
+
+export default MyApp;

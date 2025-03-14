@@ -33,6 +33,15 @@ export class User extends Document {
   @Prop({ default: Date.now })
   lastActive: Date;
 
+  @Prop({ default: 'local' })
+  provider: string;
+
+  @Prop()
+  providerId: string;
+
+  @Prop({ type: Object, default: {} })
+  unreadMessages: Record<string, number>;
+
   comparePassword: (candidatePassword: string) => Promise<boolean>
 }
 

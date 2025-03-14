@@ -52,7 +52,8 @@ export default function ChatSidebar({ onCreateRoom }: ChatSidebarProps) {
     onlineUsers, 
     activeChat, 
     setActiveChat,
-    isLoading
+    isLoading,
+    unreadMessages
   } = useChat();
 
   const [activeTab, setActiveTab] = useState<'chats' | 'rooms'>('chats');
@@ -143,16 +144,34 @@ export default function ChatSidebar({ onCreateRoom }: ChatSidebarProps) {
       {/* Tabs navigation */}
       <div className="flex border-b border-gray-700">
         <button 
-          className={`flex-1 py-3 text-center text-sm font-medium ${activeTab === 'chats' ? 'text-white border-b-2 border-blue-500' : 'text-gray-400 hover:text-white'}`}
+          className={`flex-1 py-3 text-center text-sm font-medium relative ${activeTab === 'chats' ? 'text-white border-b-2 border-blue-500' : 'text-gray-400 hover:text-white'}`}
           onClick={() => setActiveTab('chats')}
         >
           Direct Messages
+          {Object.entries(unreadMessages)
+            .filter(([key]) => key.startsWith('user_'))
+            .reduce((total, [_, count]) => total + count, 0) > 0 && (
+            <span className="absolute top-2 right-12 inline-flex items-center justify-center px-1.5 py-0.5 text-xs font-bold leading-none text-red-100 bg-red-600 rounded-full">
+              {Object.entries(unreadMessages)
+                .filter(([key]) => key.startsWith('user_'))
+                .reduce((total, [_, count]) => total + count, 0)}
+            </span>
+          )}
         </button>
         <button 
-          className={`flex-1 py-3 text-center text-sm font-medium ${activeTab === 'rooms' ? 'text-white border-b-2 border-blue-500' : 'text-gray-400 hover:text-white'}`}
+          className={`flex-1 py-3 text-center text-sm font-medium relative ${activeTab === 'rooms' ? 'text-white border-b-2 border-blue-500' : 'text-gray-400 hover:text-white'}`}
           onClick={() => setActiveTab('rooms')}
         >
           Rooms
+          {Object.entries(unreadMessages)
+            .filter(([key]) => key.startsWith('room_'))
+            .reduce((total, [_, count]) => total + count, 0) > 0 && (
+            <span className="absolute top-2 right-12 inline-flex items-center justify-center px-1.5 py-0.5 text-xs font-bold leading-none text-red-100 bg-red-600 rounded-full">
+              {Object.entries(unreadMessages)
+                .filter(([key]) => key.startsWith('room_'))
+                .reduce((total, [_, count]) => total + count, 0)}
+            </span>
+          )}
         </button>
       </div>
       
@@ -167,6 +186,7 @@ export default function ChatSidebar({ onCreateRoom }: ChatSidebarProps) {
                 .map(otherUser => {
                   const isActive = activeChat?.id === otherUser._id && activeChat?.type === 'private';
                   const isOnline = onlineUsers && otherUser._id ? onlineUsers[otherUser._id] : false;
+                  const unreadCount = otherUser._id ? unreadMessages[`user_${otherUser._id}`] || 0 : 0;
                   
                   return (
                     <button
@@ -197,6 +217,11 @@ export default function ChatSidebar({ onCreateRoom }: ChatSidebarProps) {
                       <div className="ml-2 flex-1 min-w-0">
                         <div className="flex justify-between">
                           <h4 className="text-sm font-medium truncate">{otherUser.name}</h4>
+                          {unreadCount > 0 && (
+                            <span className="ml-1 inline-flex items-center justify-center px-2 py-1 text-xs font-bold leading-none text-red-100 bg-red-600 rounded-full">
+                              {unreadCount}
+                            </span>
+                          )}
                         </div>
                         <p className="text-xs text-gray-400 truncate">
                           {isOnline ? 'Online' : 'Offline'}
@@ -213,17 +238,18 @@ export default function ChatSidebar({ onCreateRoom }: ChatSidebarProps) {
               <h3 className="text-xs uppercase text-gray-500 font-semibold">Rooms</h3>
               <button 
                 onClick={onCreateRoom}
-                className="bg-blue-600 hover:bg-blue-700 rounded-full p-1 text-white transition"
+                className="text-gray-400 hover:text-white"
                 title="Create a new room"
               >
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
-                  <path fillRule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clipRule="evenodd" />
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
                 </svg>
               </button>
             </div>
             <div className="space-y-1">
               {rooms.map(room => {
                 const isActive = activeChat?.id === room._id && activeChat?.type === 'room';
+                const unreadCount = unreadMessages[`room_${room._id}`] || 0;
                 
                 return (
                   <button
@@ -232,7 +258,7 @@ export default function ChatSidebar({ onCreateRoom }: ChatSidebarProps) {
                     onClick={() => setActiveChat({ id: room._id, type: 'room' })}
                   >
                     <div className="h-8 w-8 rounded-full bg-gray-600 flex items-center justify-center overflow-hidden">
-                      {room.image && isValidImageSrc(room.image) && !failedImages[room._id || ''] ? (
+                      {room.image && isValidImageSrc(room.image) && !failedImages[room._id] ? (
                         <Image
                           src={room.image}
                           alt={room.name}
@@ -240,7 +266,7 @@ export default function ChatSidebar({ onCreateRoom }: ChatSidebarProps) {
                           height={32}
                           className="h-full w-full object-cover"
                           priority={false}
-                          onError={() => room._id && handleImageError(room._id || '')}
+                          onError={() => handleImageError(room._id)}
                         />
                       ) : (
                         <span className="text-sm font-medium">{getInitials(room.name)}</span>
@@ -249,10 +275,13 @@ export default function ChatSidebar({ onCreateRoom }: ChatSidebarProps) {
                     <div className="ml-2 flex-1 min-w-0">
                       <div className="flex justify-between">
                         <h4 className="text-sm font-medium truncate">{room.name}</h4>
+                        {unreadCount > 0 && (
+                          <span className="ml-1 inline-flex items-center justify-center px-2 py-1 text-xs font-bold leading-none text-red-100 bg-red-600 rounded-full">
+                            {unreadCount}
+                          </span>
+                        )}
                       </div>
-                      <p className="text-xs text-gray-400 truncate">
-                        {room.isPrivate ? 'Private' : 'Public'} · {room.members?.length || 0} members
-                      </p>
+                      <p className="text-xs text-gray-400 truncate">{room.members.length} members</p>
                     </div>
                   </button>
                 );

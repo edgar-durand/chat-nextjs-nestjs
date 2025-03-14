@@ -42,6 +42,7 @@ interface ChatContextType {
   users: User[];
   typingUsers: Record<string, boolean>;
   isLoading: boolean;
+  unreadMessages: Record<string, number>;
   setActiveChat: (chat: { type: 'private' | 'room', id: string } | null) => void;
   sendMessage: (content: string) => Promise<void>;
   createRoom: (name: string, description?: string, isPrivate?: boolean, members?: string[]) => Promise<Room>;
@@ -59,6 +60,7 @@ const ChatContext = createContext<ChatContextType>({
   users: [],
   typingUsers: {},
   isLoading: true,
+  unreadMessages: {},
   setActiveChat: () => {},
   sendMessage: async () => {},
   createRoom: async () => ({ 
@@ -94,6 +96,7 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [typingUsers, setTypingUsers] = useState<Record<string, boolean>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [socketConnected, setSocketConnected] = useState(false);
+  const [unreadMessages, setUnreadMessages] = useState<Record<string, number>>({});
   
   const socketRef = useRef<Socket | null>(null);
   const currentActiveChatRef = useRef(activeChat);
@@ -133,7 +136,18 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
     
     socketRef.current.on('new_message', (message: Message) => {
       const activeChat = currentActiveChatRef.current;
-      // Only add the message if it's relevant to the active chat
+      
+      // Identificar la clave de chat para seguimiento de notificaciones
+      let chatKey = '';
+      if (message.room) {
+        chatKey = `room_${message.room}`;
+      } else if (message.sender._id !== user.id) {
+        chatKey = `user_${message.sender._id}`;
+      } else if (message.recipient) {
+        chatKey = `user_${message.recipient}`;
+      }
+      
+      // Solo agregar el mensaje si es relevante para el chat activo
       if (
         (activeChat?.type === 'private' && 
           ((message.sender._id === activeChat.id && message.recipient === user.id) || 
@@ -141,6 +155,14 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
         (activeChat?.type === 'room' && message.room === activeChat.id)
       ) {
         setMessages(prev => [...prev, message]);
+      } 
+      // Si el mensaje no es para el chat activo y no fue enviado por el usuario actual, incrementar contador
+      else if (message.sender._id !== user.id && chatKey) {
+        console.log('New message notification:', chatKey, message);
+        setUnreadMessages(prev => ({
+          ...prev,
+          [chatKey]: (prev[chatKey] || 0) + 1
+        }));
       }
     });
     
@@ -245,31 +267,95 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
     fetchInitialData();
   }, [isAuthenticated, API_URL]);
   
-  // Load messages when activeChat changes
+  // Cuando se inicia el socket y se conecta, solicitamos el estado actual de mensajes no leídos
   useEffect(() => {
-    if (!activeChat || !isAuthenticated || !socketConnected) {
+    if (socketConnected && socketRef.current && user) {
+      // Solicitar mensajes no leídos al servidor
+      socketRef.current.emit('get_unread_messages');
+      
+      // Escuchar la respuesta con el recuento de mensajes no leídos
+      socketRef.current.on('unread_messages_count', (unreadCounts: Record<string, number>) => {
+        console.log('Received unread counts:', unreadCounts);
+        setUnreadMessages(unreadCounts);
+      });
+      
+      return () => {
+        socketRef.current?.off('unread_messages_count');
+      };
+    }
+  }, [socketConnected, user]);
+
+  // Asegurarse de que los mensajes se marquen como leídos cuando se abre un chat
+  useEffect(() => {
+    if (activeChat && socketRef.current) {
+      // Crear una clave para el chat actual
+      const chatKey = activeChat.type === 'private' 
+        ? `user_${activeChat.id}` 
+        : `room_${activeChat.id}`;
+      
+      // Resetear el contador de mensajes no leídos para este chat
+      setUnreadMessages(prev => ({
+        ...prev,
+        [chatKey]: 0
+      }));
+      
+      // Notificar al servidor que los mensajes se han leído
+      socketRef.current.emit('mark_messages_read', {
+        chatId: activeChat.id,
+        chatType: activeChat.type
+      });
+    }
+  }, [activeChat]);
+  
+  // Función para manejar el cambio de chat activo
+  const handleActiveChatChange = (chat: { type: 'private' | 'room', id: string } | null) => {
+    // Limpiar las notificaciones no leídas cuando se activa un chat
+    if (chat) {
+      const chatKey = chat.type === 'private' ? `user_${chat.id}` : `room_${chat.id}`;
+      setUnreadMessages(prev => ({
+        ...prev,
+        [chatKey]: 0
+      }));
+    }
+    
+    setActiveChat(chat);
+  };
+
+  // Cargar mensajes cuando se selecciona un chat
+  useEffect(() => {
+    if (!activeChat || !user || !isAuthenticated) {
       setMessages([]);
       return;
     }
     
+    setIsLoading(true);
+    
     const fetchMessages = async () => {
       try {
-        setIsLoading(true);
-        let response;
+        let endpoint = '';
         
         if (activeChat.type === 'private') {
-          response = await axios.get(`${API_URL}/chats/direct/${activeChat.id}`);
+          endpoint = `${API_URL}/chats/direct/${activeChat.id}`;
           
           // Join user room for direct messages
           socketRef.current?.emit('join_room', { userId: activeChat.id });
         } else {
-          response = await axios.get(`${API_URL}/chats/room/${activeChat.id}`);
+          endpoint = `${API_URL}/chats/room/${activeChat.id}`;
           
           // Join room
           socketRef.current?.emit('join_room', { roomId: activeChat.id });
         }
         
+        const response = await axios.get(endpoint);
         setMessages(response.data);
+        
+        // Marcar los mensajes como leídos en el servidor
+        if (response.data.length > 0) {
+          socketRef.current?.emit('mark_messages_read', {
+            chatType: activeChat.type,
+            chatId: activeChat.id
+          });
+        }
       } catch (error) {
         console.error('Error fetching messages:', error);
       } finally {
@@ -279,18 +365,13 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
     
     fetchMessages();
     
-    // Clear typing indicator when changing chats
-    setTypingUsers({});
-    
     return () => {
-      // Leave previous chat room
-      if (activeChat.type === 'private') {
-        socketRef.current?.emit('leave_room', { userId: activeChat.id });
-      } else {
+      // Clean up - leave rooms
+      if (activeChat.type === 'room') {
         socketRef.current?.emit('leave_room', { roomId: activeChat.id });
       }
     };
-  }, [activeChat, isAuthenticated, API_URL, socketConnected]);
+  }, [activeChat, user, isAuthenticated, API_URL]);
   
   const sendMessage = async (content: string) => {
     if (!activeChat || !user || !socketRef.current) return;
@@ -389,11 +470,12 @@ export const ChatProvider: React.FC<{ children: React.ReactNode }> = ({ children
       activeChat,
       messages,
       rooms,
-      onlineUsers,
       users,
+      onlineUsers,
       typingUsers,
       isLoading,
-      setActiveChat,
+      unreadMessages,
+      setActiveChat: handleActiveChatChange,
       sendMessage,
       createRoom,
       updateRoom,

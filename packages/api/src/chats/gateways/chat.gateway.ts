@@ -64,6 +64,10 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
         isOnline: true,
       });
       
+      // Enviar recuento de mensajes no leídos al usuario cuando se conecta
+      const unreadCounts = await this.usersService.getUnreadMessages(user._id.toString());
+      client.emit('unread_messages_count', unreadCounts);
+      
     } catch (error) {
       client.disconnect();
     }
@@ -148,10 +152,54 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
       // If it's a room message
       if (createMessageDto.roomId) {
+        // Emitir a todos los miembros de la sala (están ya suscritos al canal room_X)
         this.server.to(`room_${createMessageDto.roomId}`).emit('new_message', populatedMessage);
+        
+        // Obtener TODOS los usuarios conectados (sus IDs y sockets)
+        const users = await this.usersService.findAll();
+        
+        // Para cada usuario, verificar si es miembro de la sala pero no es el remitente
+        for (const potentialMember of users) {
+          // No enviar notificación al remitente
+          if (potentialMember._id.toString() === user._id.toString()) continue;
+          
+          // Verificar si el usuario es miembro de esta sala específica
+          const isMember = await this.usersService.isRoomMember(
+            potentialMember._id, 
+            createMessageDto.roomId
+          );
+          
+          if (isMember) {
+            // Incrementar contador de mensajes no leídos en la base de datos
+            await this.usersService.incrementUnreadMessage(
+              potentialMember._id.toString(),
+              `room_${createMessageDto.roomId}`
+            );
+            
+            // Si el usuario está conectado, enviarle actualización inmediata
+            const socketId = this.userSocketMap.get(potentialMember._id.toString());
+            if (socketId) {
+              const unreadCounts = await this.usersService.getUnreadMessages(potentialMember._id.toString());
+              this.server.to(socketId).emit('unread_messages_count', unreadCounts);
+            }
+          }
+        }
       } 
       // If it's a direct message
       else if (createMessageDto.recipientId) {
+        // Incrementar el contador de mensajes no leídos en la base de datos
+        await this.usersService.incrementUnreadMessage(
+          createMessageDto.recipientId,
+          `user_${user._id}`
+        );
+        
+        // Si el receptor está conectado, enviarle actualización en tiempo real
+        const recipientSocketId = this.userSocketMap.get(createMessageDto.recipientId);
+        if (recipientSocketId) {
+          const unreadCounts = await this.usersService.getUnreadMessages(createMessageDto.recipientId);
+          this.server.to(recipientSocketId).emit('unread_messages_count', unreadCounts);
+        }
+        
         // Send to recipient
         this.server.to(`user_${createMessageDto.recipientId}`).emit('new_message', populatedMessage);
         // Send to sender (if they're not the same)
@@ -162,6 +210,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
       return { success: true, message: populatedMessage };
     } catch (error) {
+      console.error('Error sending message:', error);
       return { success: false, error: error.message };
     }
   }
@@ -218,6 +267,60 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       
       // Notify clients about read messages
       this.server.emit('message_read', { messageId: data.messageId });
+      
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  }
+
+  // New handler for getting unread messages
+  @UseGuards(WsJwtAuthGuard)
+  @SubscribeMessage('get_unread_messages')
+  async handleGetUnreadMessages(@ConnectedSocket() client: Socket) {
+    try {
+      const token = client.handshake.auth.token || client.handshake.headers.authorization?.split(' ')[1];
+      const user = await this.authService.getUserFromToken(token);
+      
+      if (!user) {
+        return { success: false, error: 'Unauthorized' };
+      }
+      
+      // Obtener mensajes no leídos desde la base de datos
+      const unreadCounts = await this.usersService.getUnreadMessages(user._id.toString());
+      client.emit('unread_messages_count', unreadCounts);
+      return { success: true, unreadCounts };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  }
+  
+  // Mark messages as read
+  @UseGuards(WsJwtAuthGuard)
+  @SubscribeMessage('mark_messages_read')
+  async handleMarkMessagesRead(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { chatId: string, chatType: 'private' | 'room' },
+  ) {
+    try {
+      const token = client.handshake.auth.token || client.handshake.headers.authorization?.split(' ')[1];
+      const user = await this.authService.getUserFromToken(token);
+      
+      if (!user) {
+        return { success: false, error: 'Unauthorized' };
+      }
+      
+      // Construir la clave del chat
+      const chatKey = data.chatType === 'private' 
+        ? `user_${data.chatId}` 
+        : `room_${data.chatId}`;
+      
+      // Marcar mensajes como leídos en la base de datos
+      await this.usersService.markMessagesAsRead(user._id.toString(), chatKey);
+      
+      // Enviar actualización al cliente
+      const unreadCounts = await this.usersService.getUnreadMessages(user._id.toString());
+      client.emit('unread_messages_count', unreadCounts);
       
       return { success: true };
     } catch (error) {

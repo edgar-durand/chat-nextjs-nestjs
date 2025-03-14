@@ -4,6 +4,7 @@ import { UsersService } from '../users/users.service';
 import { CreateUserDto } from '../users/dto/create-user.dto';
 import { LoginDto } from './dto/login.dto';
 import { User } from '../users/schemas/user.schema';
+import { GoogleAuthDto } from './dto/google-auth.dto';
 export declare class AuthService {
     private usersService;
     private jwtService;
@@ -16,6 +17,15 @@ export declare class AuthService {
             name: any;
             email: any;
             avatar: any;
+        };
+        accessToken: string;
+    }>;
+    googleAuth(googleAuthDto: GoogleAuthDto): Promise<{
+        user: {
+            id: any;
+            name: string;
+            email: string;
+            avatar: string;
         };
         accessToken: string;
     }>;

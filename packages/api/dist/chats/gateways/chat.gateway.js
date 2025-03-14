@@ -48,6 +48,8 @@ let ChatGateway = class ChatGateway {
                 userId: user._id,
                 isOnline: true,
             });
+            const unreadCounts = await this.usersService.getUnreadMessages(user._id.toString());
+            client.emit('unread_messages_count', unreadCounts);
         }
         catch (error) {
             client.disconnect();
@@ -99,8 +101,28 @@ let ChatGateway = class ChatGateway {
                 } });
             if (createMessageDto.roomId) {
                 this.server.to(`room_${createMessageDto.roomId}`).emit('new_message', populatedMessage);
+                const users = await this.usersService.findAll();
+                for (const potentialMember of users) {
+                    if (potentialMember._id.toString() === user._id.toString())
+                        continue;
+                    const isMember = await this.usersService.isRoomMember(potentialMember._id, createMessageDto.roomId);
+                    if (isMember) {
+                        await this.usersService.incrementUnreadMessage(potentialMember._id.toString(), `room_${createMessageDto.roomId}`);
+                        const socketId = this.userSocketMap.get(potentialMember._id.toString());
+                        if (socketId) {
+                            const unreadCounts = await this.usersService.getUnreadMessages(potentialMember._id.toString());
+                            this.server.to(socketId).emit('unread_messages_count', unreadCounts);
+                        }
+                    }
+                }
             }
             else if (createMessageDto.recipientId) {
+                await this.usersService.incrementUnreadMessage(createMessageDto.recipientId, `user_${user._id}`);
+                const recipientSocketId = this.userSocketMap.get(createMessageDto.recipientId);
+                if (recipientSocketId) {
+                    const unreadCounts = await this.usersService.getUnreadMessages(createMessageDto.recipientId);
+                    this.server.to(recipientSocketId).emit('unread_messages_count', unreadCounts);
+                }
                 this.server.to(`user_${createMessageDto.recipientId}`).emit('new_message', populatedMessage);
                 if (user._id.toString() !== createMessageDto.recipientId) {
                     this.server.to(`user_${user._id}`).emit('new_message', populatedMessage);
@@ -109,6 +131,7 @@ let ChatGateway = class ChatGateway {
             return { success: true, message: populatedMessage };
         }
         catch (error) {
+            console.error('Error sending message:', error);
             return { success: false, error: error.message };
         }
     }
@@ -141,6 +164,42 @@ let ChatGateway = class ChatGateway {
         try {
             await this.chatsService.markAsRead(data.messageId);
             this.server.emit('message_read', { messageId: data.messageId });
+            return { success: true };
+        }
+        catch (error) {
+            return { success: false, error: error.message };
+        }
+    }
+    async handleGetUnreadMessages(client) {
+        var _a;
+        try {
+            const token = client.handshake.auth.token || ((_a = client.handshake.headers.authorization) === null || _a === void 0 ? void 0 : _a.split(' ')[1]);
+            const user = await this.authService.getUserFromToken(token);
+            if (!user) {
+                return { success: false, error: 'Unauthorized' };
+            }
+            const unreadCounts = await this.usersService.getUnreadMessages(user._id.toString());
+            client.emit('unread_messages_count', unreadCounts);
+            return { success: true, unreadCounts };
+        }
+        catch (error) {
+            return { success: false, error: error.message };
+        }
+    }
+    async handleMarkMessagesRead(client, data) {
+        var _a;
+        try {
+            const token = client.handshake.auth.token || ((_a = client.handshake.headers.authorization) === null || _a === void 0 ? void 0 : _a.split(' ')[1]);
+            const user = await this.authService.getUserFromToken(token);
+            if (!user) {
+                return { success: false, error: 'Unauthorized' };
+            }
+            const chatKey = data.chatType === 'private'
+                ? `user_${data.chatId}`
+                : `room_${data.chatId}`;
+            await this.usersService.markMessagesAsRead(user._id.toString(), chatKey);
+            const unreadCounts = await this.usersService.getUnreadMessages(user._id.toString());
+            client.emit('unread_messages_count', unreadCounts);
             return { success: true };
         }
         catch (error) {
@@ -199,6 +258,23 @@ __decorate([
     __metadata("design:paramtypes", [socket_io_1.Socket, Object]),
     __metadata("design:returntype", Promise)
 ], ChatGateway.prototype, "handleMarkRead", null);
+__decorate([
+    (0, common_1.UseGuards)(ws_jwt_auth_guard_1.WsJwtAuthGuard),
+    (0, websockets_1.SubscribeMessage)('get_unread_messages'),
+    __param(0, (0, websockets_1.ConnectedSocket)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [socket_io_1.Socket]),
+    __metadata("design:returntype", Promise)
+], ChatGateway.prototype, "handleGetUnreadMessages", null);
+__decorate([
+    (0, common_1.UseGuards)(ws_jwt_auth_guard_1.WsJwtAuthGuard),
+    (0, websockets_1.SubscribeMessage)('mark_messages_read'),
+    __param(0, (0, websockets_1.ConnectedSocket)()),
+    __param(1, (0, websockets_1.MessageBody)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [socket_io_1.Socket, Object]),
+    __metadata("design:returntype", Promise)
+], ChatGateway.prototype, "handleMarkMessagesRead", null);
 exports.ChatGateway = ChatGateway = __decorate([
     (0, websockets_1.WebSocketGateway)({
         cors: {

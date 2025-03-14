@@ -44,6 +44,45 @@ let AuthService = class AuthService {
             accessToken: this.jwtService.sign(payload),
         };
     }
+    async googleAuth(googleAuthDto) {
+        try {
+            let user = await this.usersService.findByEmail(googleAuthDto.email);
+            if (!user) {
+                const newUser = await this.usersService.create({
+                    name: googleAuthDto.name,
+                    email: googleAuthDto.email,
+                    password: Math.random().toString(36).slice(-10),
+                    avatar: googleAuthDto.avatar || '',
+                });
+                user = newUser;
+            }
+            else {
+                const updateData = {
+                    name: user.name || googleAuthDto.name,
+                };
+                if ((!user.avatar || user.avatar === '') && googleAuthDto.avatar) {
+                    updateData.avatar = googleAuthDto.avatar;
+                }
+                await this.usersService.updateProfile(user._id, updateData);
+                user = await this.usersService.findOne(user._id);
+            }
+            await this.usersService.updateOnlineStatus(user._id, true);
+            const payload = { email: user.email, sub: user._id };
+            return {
+                user: {
+                    id: user._id,
+                    name: user.name,
+                    email: user.email,
+                    avatar: user.avatar,
+                },
+                accessToken: this.jwtService.sign(payload),
+            };
+        }
+        catch (error) {
+            console.error('Google auth error:', error);
+            throw new common_1.UnauthorizedException('Google authentication failed');
+        }
+    }
     async register(createUserDto) {
         const existingUser = await this.usersService.findByEmail(createUserDto.email);
         if (existingUser) {

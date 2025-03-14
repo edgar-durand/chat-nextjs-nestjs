@@ -8,12 +8,13 @@ A modern real-time chat application built with NestJS and NextJS in a monorepo s
 - Chat rooms for group conversations
 - Private messaging between users
 - User authentication
+- Google authentication
 - Modern and responsive UI
 
 ## Tech Stack
 
 - **Backend**: NestJS, MongoDB with Mongoose, Socket.io
-- **Frontend**: NextJS, React, TailwindCSS
+- **Frontend**: NextJS, React, TailwindCSS, NextAuth.js
 - **Monorepo**: Turborepo, NPM Workspaces
 
 ## Getting Started
@@ -63,6 +64,14 @@ LOG_LEVEL=debug
 ```
 # API URL - must match the backend URL
 NEXT_PUBLIC_API_URL=http://localhost:3001
+
+# NextAuth.js Configuration
+NEXTAUTH_URL=http://localhost:3000
+NEXTAUTH_SECRET=your_nextauth_secret_key
+
+# Google OAuth
+GOOGLE_CLIENT_ID=your_google_client_id
+GOOGLE_CLIENT_SECRET=your_google_client_secret
 ```
 
 ### Development

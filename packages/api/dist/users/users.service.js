@@ -17,9 +17,11 @@ const common_1 = require("@nestjs/common");
 const mongoose_1 = require("@nestjs/mongoose");
 const mongoose_2 = require("mongoose");
 const user_schema_1 = require("./schemas/user.schema");
+const room_schema_1 = require("../rooms/schemas/room.schema");
 let UsersService = class UsersService {
-    constructor(userModel) {
+    constructor(userModel, roomModel) {
         this.userModel = userModel;
+        this.roomModel = roomModel;
     }
     async create(createUserDto) {
         const createdUser = new this.userModel(createUserDto);
@@ -77,11 +79,48 @@ let UsersService = class UsersService {
         await user.save();
         return user;
     }
+    async isRoomMember(userId, roomId) {
+        const room = await this.roomModel.findById(roomId).exec();
+        if (!room) {
+            return false;
+        }
+        return room.members.some((memberId) => memberId.toString() === userId.toString());
+    }
+    async incrementUnreadMessage(userId, chatKey) {
+        const user = await this.userModel.findById(userId).exec();
+        if (!user) {
+            return;
+        }
+        if (!user.unreadMessages) {
+            user.unreadMessages = {};
+        }
+        user.unreadMessages[chatKey] = (user.unreadMessages[chatKey] || 0) + 1;
+        await this.userModel.updateOne({ _id: userId }, { $set: { unreadMessages: user.unreadMessages } }).exec();
+    }
+    async getUnreadMessages(userId) {
+        const user = await this.userModel.findById(userId).exec();
+        if (!user || !user.unreadMessages) {
+            return {};
+        }
+        return user.unreadMessages;
+    }
+    async markMessagesAsRead(userId, chatKey) {
+        const user = await this.userModel.findById(userId).exec();
+        if (!user || !user.unreadMessages) {
+            return;
+        }
+        if (user.unreadMessages[chatKey]) {
+            delete user.unreadMessages[chatKey];
+            await this.userModel.updateOne({ _id: userId }, { $set: { unreadMessages: user.unreadMessages } }).exec();
+        }
+    }
 };
 exports.UsersService = UsersService;
 exports.UsersService = UsersService = __decorate([
     (0, common_1.Injectable)(),
     __param(0, (0, mongoose_1.InjectModel)(user_schema_1.User.name)),
-    __metadata("design:paramtypes", [mongoose_2.Model])
+    __param(1, (0, mongoose_1.InjectModel)(room_schema_1.Room.name)),
+    __metadata("design:paramtypes", [mongoose_2.Model,
+        mongoose_2.Model])
 ], UsersService);
 //# sourceMappingURL=users.service.js.map
